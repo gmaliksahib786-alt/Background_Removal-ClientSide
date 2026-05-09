@@ -661,21 +661,32 @@ processBtn.addEventListener('click', async () => {
   results = {};
   dlAllBtn.style.display = 'none';
 
-  // Load @imgly library dynamically
+  // Load @imgly library dynamically — try unpkg first, jsdelivr as fallback
   if (!bgRemoval) {
     wasmBanner.style.display = 'flex';
-    try {
-      const mod = await import('https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/dist/background-removal.js');
-      bgRemoval = mod;
-      wasmLoaded = true;
-    } catch(e) {
-      wasmBanner.style.display = 'none';
-      alert('Failed to load AI model. Check your internet connection.');
-      processBtn.disabled = false;
-      processBtn.textContent = '✂️ Remove Backgrounds';
-      return;
+    const CDN_URLS = [
+      'https://unpkg.com/@imgly/background-removal@1.5.5/dist/index.mjs',
+      'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/dist/index.mjs',
+    ];
+    let loaded = false;
+    for (const url of CDN_URLS) {
+      try {
+        const mod = await import(url);
+        bgRemoval = mod;
+        wasmLoaded = true;
+        loaded = true;
+        break;
+      } catch(e) {
+        console.warn('CDN failed, trying next:', url, e);
+      }
     }
     wasmBanner.style.display = 'none';
+    if (!loaded) {
+      alert('Failed to load AI model. Check your internet connection and try again.');
+      processBtn.disabled = false;
+      processBtn.innerHTML = '✂️ Remove Backgrounds';
+      return;
+    }
   }
 
   let done = 0;
@@ -714,8 +725,9 @@ async function processImage(i) {
       model: selectedModel,
       output: { format: 'image/png', quality: 1 },
     };
-    // @imgly returns a Blob
-    const blob = await bgRemoval.removeBackground(file, config);
+    // Handle named export, default export, or direct function
+    const removeFn = bgRemoval.removeBackground || bgRemoval.default || bgRemoval;
+    const blob = await removeFn(file, config);
 
     clearInterval(progInterval);
     if (pf) pf.style.width = '100%';
