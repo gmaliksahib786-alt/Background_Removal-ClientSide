@@ -539,35 +539,109 @@ input[type="color"]{width:28px;height:28px;border:none;border-radius:50%;cursor:
   </div>
 </div>
 
-<!-- esm.sh resolves bare Node specifiers to browser-compatible ESM -->
+<!-- Transformers.js v3 — WebGPU + WASM fallback, RMBG-1.4 model -->
 <script type="module">
-import * as imglyMod from 'https://esm.sh/@imgly/background-removal@1.5.5';
-const imglyRemoveBackground = imglyMod.removeBackground ?? imglyMod.default ?? imglyMod;
+import { env, AutoModel, AutoProcessor, RawImage } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.2/dist/transformers.min.js';
+
+// ---- Config ----
+// Use Hugging Face CDN for model weights — no self-hosting needed
+env.allowLocalModels = false;
+env.useBrowserCache = true; // cache model after first download
 
 // ---- State ----
 let images = [];
 let results = {};
-let selectedModel = 'isnet_fp16';
 let selectedBg = 'transparent';
+let model = null;
+let processor = null;
+let modelLoading = false;
+let useWebGPU = false;
+
+const MODEL_ID = 'briaai/RMBG-1.4';
 
 // ---- DOM refs ----
-const dropZone = document.getElementById('dropZone');
-const fileInput = document.getElementById('fileInput');
-const processBtn = document.getElementById('processBtn');
-const cardsSection = document.getElementById('cardsSection');
+const dropZone    = document.getElementById('dropZone');
+const fileInput   = document.getElementById('fileInput');
+const processBtn  = document.getElementById('processBtn');
+const cardsSection= document.getElementById('cardsSection');
 const cardsContainer = document.getElementById('cardsContainer');
-const dlAllBtn = document.getElementById('dlAllBtn');
-const bgPicker = document.getElementById('bgPicker');
-const wasmBanner = document.getElementById('wasmBanner');
+const dlAllBtn    = document.getElementById('dlAllBtn');
+const bgPicker    = document.getElementById('bgPicker');
+const wasmBanner  = document.getElementById('wasmBanner');
 
-// ---- Model selector ----
+// ---- Detect WebGPU ----
+async function checkWebGPU() {
+  try {
+    if (!navigator.gpu) return false;
+    const adapter = await navigator.gpu.requestAdapter();
+    return !!adapter;
+  } catch { return false; }
+}
+
+// ---- Model selector (maps to model quality — same model, just UI) ----
+let selectedQuality = 'quantized'; // default = fast
 document.querySelectorAll('.model-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.model-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    selectedModel = btn.dataset.model;
+    selectedQuality = btn.dataset.model;
+    // Reset loaded model so it reloads with new precision
+    if (model) { model = null; processor = null; }
   });
 });
+
+// Map UI model names to RMBG onnx variants
+function getModelFile() {
+  const map = {
+    'isnet_fp16':    'model_fp16.onnx',     // Best Quality
+    'isnet_quint8':  'model_quantized.onnx', // Balanced
+    'u2net':         'model_quantized.onnx', // Fast (same quant)
+    'u2netp':        'model_quantized.onnx', // Mobile
+  };
+  return map[selectedQuality] || 'model_quantized.onnx';
+}
+
+// ---- Load model ----
+async function loadModel() {
+  if (model && processor) return true;
+  if (modelLoading) return false;
+  modelLoading = true;
+
+  wasmBanner.style.display = 'flex';
+  wasmBanner.querySelector('span').textContent = 'AI model loading... (first time ~45MB, cached forever after)';
+
+  useWebGPU = await checkWebGPU();
+  const dtype = getModelFile().includes('fp16') ? 'fp16' : 'q8';
+
+  try {
+    // Processor config for RMBG-1.4
+    const processorConfig = {
+      do_normalize: true, do_pad: false, do_rescale: true, do_resize: true,
+      image_mean: [0.5, 0.5, 0.5], image_std: [1, 1, 1],
+      resample: 2, rescale_factor: 1/255,
+      size: { width: 1024, height: 1024 },
+    };
+
+    [model, processor] = await Promise.all([
+      AutoModel.from_pretrained(MODEL_ID, {
+        config: { model_type: 'custom' },
+        device: useWebGPU ? 'webgpu' : 'wasm',
+        dtype: useWebGPU ? 'fp32' : dtype,
+      }),
+      AutoProcessor.from_pretrained(MODEL_ID, { config: processorConfig }),
+    ]);
+
+    wasmBanner.style.display = 'none';
+    modelLoading = false;
+    console.log('Model loaded!', useWebGPU ? 'WebGPU ⚡' : 'WASM');
+    return true;
+  } catch(err) {
+    console.error('Model load failed:', err);
+    wasmBanner.querySelector('span').textContent = '❌ Model load failed. Check internet & retry.';
+    modelLoading = false;
+    return false;
+  }
+}
 
 // ---- BG swatch selector ----
 document.querySelectorAll('.bg-swatch').forEach(sw => {
@@ -589,9 +663,7 @@ dropZone.addEventListener('drop', e => {
   e.preventDefault(); dropZone.classList.remove('dragover');
   addFiles([...e.dataTransfer.files]);
 });
-dropZone.addEventListener('click', e => {
-  if (!e.target.closest('.drop-btn')) fileInput.click();
-});
+dropZone.addEventListener('click', e => { if (!e.target.closest('.drop-btn')) fileInput.click(); });
 fileInput.addEventListener('change', () => addFiles([...fileInput.files]));
 
 function addFiles(files) {
@@ -606,6 +678,9 @@ function addFiles(files) {
   results = {};
   dlAllBtn.style.display = 'none';
   renderCards();
+
+  // Preload model in background as soon as images are added
+  if (!model && !modelLoading) loadModel();
 }
 
 function fmtBytes(b) {
@@ -624,8 +699,8 @@ function renderCards() {
     card.id = 'card-' + i;
     card.innerHTML = `
       <div class="card-inner">
-        <div class="thumb-wrap">
-          <div class="thumb-shimmer" id="thumb-${i}"></div>
+        <div class="thumb-wrap" id="thumb-${i}">
+          <div class="thumb-shimmer"></div>
         </div>
         <div class="card-info">
           <div class="card-name" title="${file.name}">${file.name}</div>
@@ -646,11 +721,7 @@ function renderCards() {
     const img = new Image();
     img.onload = () => {
       const wrap = document.getElementById('thumb-' + i);
-      if (wrap) {
-        wrap.className = '';
-        wrap.style.cssText = 'width:80px;height:60px;border-radius:8px;overflow:hidden;';
-        wrap.innerHTML = `<img style="width:100%;height:100%;object-fit:cover;border-radius:8px;display:block" src="${origUrl}" alt="">`;
-      }
+      if (wrap) wrap.innerHTML = `<img style="width:100%;height:100%;object-fit:cover;border-radius:8px;display:block" src="${origUrl}">`;
     };
     img.src = origUrl;
   });
@@ -664,9 +735,16 @@ processBtn.addEventListener('click', async () => {
   results = {};
   dlAllBtn.style.display = 'none';
 
+  const ok = await loadModel();
+  if (!ok) {
+    processBtn.disabled = false;
+    processBtn.innerHTML = '✂️ Remove Backgrounds';
+    return;
+  }
+
   let done = 0;
   for (let i = 0; i < images.length; i++) {
-    await processImage(i);
+    await processOne(i);
     done++;
     if (done === images.length) {
       processBtn.disabled = false;
@@ -676,90 +754,88 @@ processBtn.addEventListener('click', async () => {
   }
 });
 
-async function processImage(i) {
+async function processOne(i) {
   const file = images[i];
   const origUrl = URL.createObjectURL(file);
   const badge = document.getElementById('badge-' + i);
-  const pw = document.getElementById('pw-' + i);
-  const pf = document.getElementById('pf-' + i);
+  const pw    = document.getElementById('pw-' + i);
+  const pf    = document.getElementById('pf-' + i);
 
   badge.className = 'badge-status processing';
   badge.textContent = 'Processing...';
   pw.style.display = 'block';
 
-  // Show WASM loading banner on first image
-  if (i === 0) {
-    wasmBanner.style.display = 'flex';
-    wasmBanner.querySelector('span').textContent = 'AI model loading (first time ~30–40MB, cached after)...';
-  }
-
   let prog = 0;
-  const progInterval = setInterval(() => {
-    prog = Math.min(prog + Math.random() * 6, 85);
+  const ticker = setInterval(() => {
+    prog = Math.min(prog + 4, 80);
     if (pf) pf.style.width = prog + '%';
-  }, 300);
+  }, 200);
 
   try {
-    const config = {
-      model: selectedModel,
-      output: { format: 'image/png', quality: 1 },
-      progress: (key, current, total) => {
-        if (total > 0) {
-          const p = Math.round((current / total) * 85);
-          if (pf) pf.style.width = Math.max(prog, p) + '%';
-        }
-      }
-    };
+    const t0 = performance.now();
 
-    // imglyRemoveBackground is the default export from esm.sh
-    const blob = await imglyRemoveBackground(file, config);
+    // Load image via RawImage (Transformers.js helper)
+    const rawImg = await RawImage.fromURL(origUrl);
 
-    clearInterval(progInterval);
-    wasmBanner.style.display = 'none';
-    if (pf) pf.style.width = '100%';
+    // Run through processor + model
+    const { pixel_values } = await processor(rawImg);
+    const { output } = await model({ input: pixel_values });
 
-    let finalBlob = blob;
+    // output is the mask — resize to original image dimensions
+    const mask = await RawImage.fromTensor(output[0].mul(255).to('uint8')).resize(rawImg.width, rawImg.height);
+
+    // Composite: draw original + apply mask as alpha channel
+    const canvas = document.createElement('canvas');
+    canvas.width = rawImg.width;
+    canvas.height = rawImg.height;
+    const ctx = canvas.getContext('2d');
+
+    // Apply bg color if set
     if (selectedBg && selectedBg !== 'transparent') {
-      finalBlob = await applyBackground(blob, selectedBg);
+      ctx.fillStyle = selectedBg;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
 
-    results[i] = { blob: finalBlob, origUrl };
-    setCardDone(i, file, finalBlob, origUrl);
+    ctx.drawImage(rawImg.toCanvas(), 0, 0);
+
+    // Apply mask as alpha
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const maskData = mask.data;
+    for (let j = 0; j < maskData.length; j++) {
+      imageData.data[j * 4 + 3] = maskData[j];
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+
+    // Convert to blob
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+
+    clearInterval(ticker);
+    if (pf) pf.style.width = '100%';
+
+    results[i] = { blob, origUrl };
+    setCardDone(i, file, blob, origUrl, elapsed);
 
   } catch(err) {
-    clearInterval(progInterval);
-    wasmBanner.style.display = 'none';
+    clearInterval(ticker);
     badge.className = 'badge-status error';
     badge.textContent = '✕ Failed';
     if (pf) pf.style.width = '0%';
     document.getElementById('card-' + i).classList.add('error');
-    console.error('BG removal failed:', err);
+    console.error('Failed:', err);
   }
 }
 
-async function applyBackground(pngBlob, color) {
-  return new Promise(resolve => {
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width; canvas.height = img.height;
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = color;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0);
-      canvas.toBlob(resolve, 'image/png', 1);
-    };
-    img.src = URL.createObjectURL(pngBlob);
-  });
-}
-
-function setCardDone(i, file, blob, origUrl) {
+function setCardDone(i, file, blob, origUrl, elapsed) {
   const badge = document.getElementById('badge-' + i);
   badge.className = 'badge-status done';
-  badge.textContent = 'Done ✓';
+  badge.textContent = `Done ✓ ${elapsed}s`;
   document.getElementById('card-' + i).classList.add('done');
-  const pf = document.getElementById('pf-' + i);
-  setTimeout(() => { if(pf) pf.closest('.progress-wrap').style.display = 'none'; }, 600);
+  setTimeout(() => {
+    const pw = document.getElementById('pw-' + i);
+    if (pw) pw.style.display = 'none';
+  }, 600);
 
   const blobUrl = URL.createObjectURL(blob);
   const outName = file.name.replace(/\.[^/.]+$/, '') + '_nobg.png';
@@ -808,7 +884,7 @@ window.openLb = function(i) {
   document.getElementById('lbStats').innerHTML = `
     <div class="lb-stat"><div class="val">${fmtBytes(file.size)}</div><div class="lbl">Original</div></div>
     <div class="lb-stat"><div class="val">${fmtBytes(r.blob.size)}</div><div class="lbl">Output PNG</div></div>
-    <div class="lb-stat"><div class="val">${selectedModel}</div><div class="lbl">Model</div></div>
+    <div class="lb-stat"><div class="val">RMBG-1.4</div><div class="lbl">Model</div></div>
   `;
   const outName = file.name.replace(/\.[^/.]+$/, '') + '_nobg.png';
   const blobUrl = URL.createObjectURL(r.blob);
@@ -831,15 +907,13 @@ document.querySelectorAll('.lb-swatch').forEach(sw => {
 function applyLbBg(bg) {
   const wrap = document.getElementById('compareWrap');
   if (bg === 'checker') {
-    wrap.style.backgroundColor = '#f0f0f0';
     wrap.style.backgroundImage = 'linear-gradient(45deg,#ccc 25%,transparent 25%),linear-gradient(-45deg,#ccc 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#ccc 75%),linear-gradient(-45deg,transparent 75%,#ccc 75%)';
     wrap.style.backgroundSize = '20px 20px';
     wrap.style.backgroundPosition = '0 0,0 10px,10px -10px,-10px 0';
+    wrap.style.backgroundColor = '#f0f0f0';
   } else {
     wrap.style.backgroundImage = 'none';
     wrap.style.backgroundColor = bg;
-    wrap.style.backgroundSize = '';
-    wrap.style.backgroundPosition = '';
   }
 }
 
@@ -852,16 +926,16 @@ document.addEventListener('keydown', e => {
 });
 
 function initSlider() {
-  const wrap = document.getElementById('compareWrap');
+  const wrap   = document.getElementById('compareWrap');
   const before = document.getElementById('lbBeforeWrap');
-  const divider = document.getElementById('compareDivider');
+  const div    = document.getElementById('compareDivider');
   const handle = document.getElementById('compareHandle');
   let dragging = false;
   function setPos(x) {
-    const rect = wrap.getBoundingClientRect();
-    const pct = Math.max(0, Math.min(100, ((x - rect.left) / rect.width) * 100));
+    const r = wrap.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(100, ((x - r.left) / r.width) * 100));
     before.style.width = pct + '%';
-    divider.style.left = pct + '%';
+    div.style.left = pct + '%';
     handle.style.left = pct + '%';
   }
   wrap.addEventListener('mousedown', e => { dragging = true; setPos(e.clientX); });
