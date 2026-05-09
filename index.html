@@ -541,7 +541,8 @@ input[type="color"]{width:28px;height:28px;border:none;border-radius:50%;cursor:
 
 <!-- esm.sh resolves bare Node specifiers to browser-compatible ESM -->
 <script type="module">
-import imglyRemoveBackground from 'https://esm.sh/@imgly/background-removal@1.5.5';
+import * as imglyMod from 'https://esm.sh/@imgly/background-removal@1.5.5';
+const imglyRemoveBackground = imglyMod.removeBackground ?? imglyMod.default ?? imglyMod;
 
 // ---- State ----
 let images = [];
