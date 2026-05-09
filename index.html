@@ -539,15 +539,15 @@ input[type="color"]{width:28px;height:28px;border:none;border-radius:50%;cursor:
   </div>
 </div>
 
-<!-- @imgly/background-removal via CDN (ESM) -->
+<!-- esm.sh resolves bare Node specifiers to browser-compatible ESM -->
 <script type="module">
+import imglyRemoveBackground from 'https://esm.sh/@imgly/background-removal@1.5.5';
+
 // ---- State ----
 let images = [];
-let results = {}; // idx → { blob, origBlob, origUrl }
+let results = {};
 let selectedModel = 'isnet_fp16';
 let selectedBg = 'transparent';
-let wasmLoaded = false;
-let bgRemoval = null;
 
 // ---- DOM refs ----
 const dropZone = document.getElementById('dropZone');
@@ -607,7 +607,6 @@ function addFiles(files) {
   renderCards();
 }
 
-// ---- Render cards ----
 function fmtBytes(b) {
   if (b < 1024) return b + 'B';
   if (b < 1048576) return (b/1024).toFixed(1) + 'KB';
@@ -638,16 +637,19 @@ function renderCards() {
           </div>
         </div>
         <div class="card-actions" id="actions-${i}">
-          <button class="view-btn" disabled id="viewbtn-${i}">View</button>
+          <button class="view-btn" disabled>View</button>
         </div>
       </div>
     `;
     cardsContainer.appendChild(card);
-    // Load thumb
     const img = new Image();
     img.onload = () => {
       const wrap = document.getElementById('thumb-' + i);
-      if (wrap) { wrap.className = 'thumb-img-wrap'; wrap.innerHTML = `<img class="thumb-img" src="${origUrl}" alt="">`; }
+      if (wrap) {
+        wrap.className = '';
+        wrap.style.cssText = 'width:80px;height:60px;border-radius:8px;overflow:hidden;';
+        wrap.innerHTML = `<img style="width:100%;height:100%;object-fit:cover;border-radius:8px;display:block" src="${origUrl}" alt="">`;
+      }
     };
     img.src = origUrl;
   });
@@ -657,37 +659,9 @@ function renderCards() {
 processBtn.addEventListener('click', async () => {
   if (!images.length) return;
   processBtn.disabled = true;
-  processBtn.textContent = '⏳ Processing...';
+  processBtn.innerHTML = '⏳ Processing...';
   results = {};
   dlAllBtn.style.display = 'none';
-
-  // Load @imgly library dynamically — try unpkg first, jsdelivr as fallback
-  if (!bgRemoval) {
-    wasmBanner.style.display = 'flex';
-    const CDN_URLS = [
-      'https://unpkg.com/@imgly/background-removal@1.5.5/dist/index.mjs',
-      'https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.5.5/dist/index.mjs',
-    ];
-    let loaded = false;
-    for (const url of CDN_URLS) {
-      try {
-        const mod = await import(url);
-        bgRemoval = mod;
-        wasmLoaded = true;
-        loaded = true;
-        break;
-      } catch(e) {
-        console.warn('CDN failed, trying next:', url, e);
-      }
-    }
-    wasmBanner.style.display = 'none';
-    if (!loaded) {
-      alert('Failed to load AI model. Check your internet connection and try again.');
-      processBtn.disabled = false;
-      processBtn.innerHTML = '✂️ Remove Backgrounds';
-      return;
-    }
-  }
 
   let done = 0;
   for (let i = 0; i < images.length; i++) {
@@ -704,53 +678,64 @@ processBtn.addEventListener('click', async () => {
 async function processImage(i) {
   const file = images[i];
   const origUrl = URL.createObjectURL(file);
-
-  // Update UI → processing
   const badge = document.getElementById('badge-' + i);
   const pw = document.getElementById('pw-' + i);
   const pf = document.getElementById('pf-' + i);
+
   badge.className = 'badge-status processing';
   badge.textContent = 'Processing...';
   pw.style.display = 'block';
 
-  // Fake progress animation
+  // Show WASM loading banner on first image
+  if (i === 0) {
+    wasmBanner.style.display = 'flex';
+    wasmBanner.querySelector('span').textContent = 'AI model loading (first time ~30–40MB, cached after)...';
+  }
+
   let prog = 0;
   const progInterval = setInterval(() => {
-    prog = Math.min(prog + Math.random() * 8, 88);
+    prog = Math.min(prog + Math.random() * 6, 85);
     if (pf) pf.style.width = prog + '%';
-  }, 200);
+  }, 300);
 
   try {
     const config = {
       model: selectedModel,
       output: { format: 'image/png', quality: 1 },
+      progress: (key, current, total) => {
+        if (total > 0) {
+          const p = Math.round((current / total) * 85);
+          if (pf) pf.style.width = Math.max(prog, p) + '%';
+        }
+      }
     };
-    // Handle named export, default export, or direct function
-    const removeFn = bgRemoval.removeBackground || bgRemoval.default || bgRemoval;
-    const blob = await removeFn(file, config);
+
+    // imglyRemoveBackground is the default export from esm.sh
+    const blob = await imglyRemoveBackground(file, config);
 
     clearInterval(progInterval);
+    wasmBanner.style.display = 'none';
     if (pf) pf.style.width = '100%';
 
-    // Apply background color if not transparent
     let finalBlob = blob;
     if (selectedBg && selectedBg !== 'transparent') {
       finalBlob = await applyBackground(blob, selectedBg);
     }
 
-    results[i] = { blob: finalBlob, origUrl, origBlob: file };
+    results[i] = { blob: finalBlob, origUrl };
     setCardDone(i, file, finalBlob, origUrl);
+
   } catch(err) {
     clearInterval(progInterval);
+    wasmBanner.style.display = 'none';
     badge.className = 'badge-status error';
-    badge.textContent = 'Error';
+    badge.textContent = '✕ Failed';
     if (pf) pf.style.width = '0%';
     document.getElementById('card-' + i).classList.add('error');
     console.error('BG removal failed:', err);
   }
 }
 
-// Apply solid background to transparent PNG
 async function applyBackground(pngBlob, color) {
   return new Promise(resolve => {
     const img = new Image();
@@ -762,7 +747,6 @@ async function applyBackground(pngBlob, color) {
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.drawImage(img, 0, 0);
       canvas.toBlob(resolve, 'image/png', 1);
-      URL.revokeObjectURL(img.src);
     };
     img.src = URL.createObjectURL(pngBlob);
   });
@@ -778,20 +762,17 @@ function setCardDone(i, file, blob, origUrl) {
 
   const blobUrl = URL.createObjectURL(blob);
   const outName = file.name.replace(/\.[^/.]+$/, '') + '_nobg.png';
-  const actions = document.getElementById('actions-' + i);
-  actions.innerHTML = `
+  document.getElementById('actions-' + i).innerHTML = `
     <a class="dl-btn" href="${blobUrl}" download="${outName}">⬇️ Save PNG</a>
     <button class="view-btn" onclick="openLb(${i})">Before/After</button>
   `;
 }
 
-// ---- Download all ----
 function downloadAll() {
   Object.keys(results).forEach((k, idx) => {
     setTimeout(() => {
-      const file = images[k];
       const { blob } = results[k];
-      const name = file.name.replace(/\.[^/.]+$/, '') + '_nobg.png';
+      const name = images[k].name.replace(/\.[^/.]+$/, '') + '_nobg.png';
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = name; a.click();
@@ -800,7 +781,6 @@ function downloadAll() {
   });
 }
 
-// ---- Clear all ----
 function clearAll() {
   images = []; results = {};
   cardsContainer.innerHTML = '';
@@ -813,43 +793,32 @@ function clearAll() {
   fileInput.value = '';
 }
 
-// Make clearAll + downloadAll global
 window.clearAll = clearAll;
 window.downloadAll = downloadAll;
 
 // ---- LIGHTBOX ----
-let currentLbIdx = null;
-let lbBg = 'checker';
-
 window.openLb = function(i) {
   const r = results[i];
   if (!r) return;
-  currentLbIdx = i;
   const file = images[i];
   document.getElementById('lbTitle').textContent = file.name;
   document.getElementById('lbBeforeImg').src = r.origUrl;
   document.getElementById('lbAfterImg').src = URL.createObjectURL(r.blob);
-
-  // Stats
   document.getElementById('lbStats').innerHTML = `
     <div class="lb-stat"><div class="val">${fmtBytes(file.size)}</div><div class="lbl">Original</div></div>
-    <div class="lb-stat"><div class="val">${fmtBytes(r.blob.size)}</div><div class="lbl">Output size</div></div>
-    <div class="lb-stat"><div class="val">${selectedModel}</div><div class="lbl">Model used</div></div>
+    <div class="lb-stat"><div class="val">${fmtBytes(r.blob.size)}</div><div class="lbl">Output PNG</div></div>
+    <div class="lb-stat"><div class="val">${selectedModel}</div><div class="lbl">Model</div></div>
   `;
-
-  // Download btn
   const outName = file.name.replace(/\.[^/.]+$/, '') + '_nobg.png';
   const blobUrl = URL.createObjectURL(r.blob);
   document.getElementById('lbDlBtn').onclick = () => {
     const a = document.createElement('a'); a.href = blobUrl; a.download = outName; a.click();
   };
-
   applyLbBg('checker');
   document.getElementById('lightbox').classList.add('open');
   initSlider();
 };
 
-// LB background swatches
 document.querySelectorAll('.lb-swatch').forEach(sw => {
   sw.addEventListener('click', () => {
     document.querySelectorAll('.lb-swatch').forEach(s => s.classList.remove('active'));
@@ -859,15 +828,10 @@ document.querySelectorAll('.lb-swatch').forEach(sw => {
 });
 
 function applyLbBg(bg) {
-  lbBg = bg;
   const wrap = document.getElementById('compareWrap');
   if (bg === 'checker') {
     wrap.style.backgroundColor = '#f0f0f0';
-    wrap.style.backgroundImage = `
-      linear-gradient(45deg,#ccc 25%,transparent 25%),
-      linear-gradient(-45deg,#ccc 25%,transparent 25%),
-      linear-gradient(45deg,transparent 75%,#ccc 75%),
-      linear-gradient(-45deg,transparent 75%,#ccc 75%)`;
+    wrap.style.backgroundImage = 'linear-gradient(45deg,#ccc 25%,transparent 25%),linear-gradient(-45deg,#ccc 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#ccc 75%),linear-gradient(-45deg,transparent 75%,#ccc 75%)';
     wrap.style.backgroundSize = '20px 20px';
     wrap.style.backgroundPosition = '0 0,0 10px,10px -10px,-10px 0';
   } else {
@@ -879,28 +843,26 @@ function applyLbBg(bg) {
 }
 
 window.closeLb = function(e, force) {
-  if (force || (e && e.target === document.getElementById('lightbox'))) {
+  if (force || (e && e.target === document.getElementById('lightbox')))
     document.getElementById('lightbox').classList.remove('open');
-  }
 };
-document.addEventListener('keydown', e => { if (e.key === 'Escape') document.getElementById('lightbox').classList.remove('open'); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.getElementById('lightbox').classList.remove('open');
+});
 
-// ---- Before/After slider ----
 function initSlider() {
   const wrap = document.getElementById('compareWrap');
   const before = document.getElementById('lbBeforeWrap');
   const divider = document.getElementById('compareDivider');
   const handle = document.getElementById('compareHandle');
   let dragging = false;
-
   function setPos(x) {
     const rect = wrap.getBoundingClientRect();
-    let pct = Math.max(0, Math.min(100, ((x - rect.left) / rect.width) * 100));
+    const pct = Math.max(0, Math.min(100, ((x - rect.left) / rect.width) * 100));
     before.style.width = pct + '%';
     divider.style.left = pct + '%';
     handle.style.left = pct + '%';
   }
-
   wrap.addEventListener('mousedown', e => { dragging = true; setPos(e.clientX); });
   window.addEventListener('mousemove', e => { if (dragging) setPos(e.clientX); });
   window.addEventListener('mouseup', () => { dragging = false; });
