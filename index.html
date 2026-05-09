@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Free Background Remover — AI Powered, No Upload, Instant</title>
+<meta name="description" content="Remove image background instantly using AI. No server upload, 100% private, free forever. Supports JPG, PNG, WebP. Download transparent PNG.">
+<meta name="keywords" content="background remover, remove background, transparent background, AI background remover, free bg remover">
+<meta property="og:title" content="Free AI Background Remover — No Upload Required">
+<meta property="og:description" content="Remove backgrounds instantly in your browser. No server, no signup, unlimited free.">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;1,9..40,300&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root{
+  --bg:#fafaf8;
+  --surface:#ffffff;
+  --surface2:#f4f3ef;
+  --surface3:#eceae4;
+  --border:rgba(0,0,0,0.08);
+  --border2:rgba(0,0,0,0.15);
+  --text:#1a1916;
+  --muted:#6b6a66;
+  --faint:#a8a7a3;
+  --accent:#1a1916;
+  --accent-inv:#fafaf8;
+  --green:#1a7a4a;
+  --green-bg:#edf7f1;
+  --green-border:#b8e4cb;
+  --red:#c0392b;
+  --amber:#9a6b00;
+  --amber-bg:#fef9ec;
+  --display:'Syne',sans-serif;
+  --body:'DM Sans',sans-serif;
+  --radius:14px;
+  --radius-sm:9px;
+}
+
+body{background:var(--bg);color:var(--text);font-family:var(--body);min-height:100vh;line-height:1.6}
+
+/* Subtle dot grid bg */
+body::before{
+  content:'';position:fixed;inset:0;
+  background-image:radial-gradient(circle,rgba(0,0,0,0.06) 1px,transparent 1px);
+  background-size:24px 24px;pointer-events:none;z-index:0;
+}
+
+.wrap{position:relative;z-index:1;max-width:960px;margin:0 auto;padding:3rem 1.5rem 6rem}
+
+/* HEADER */
+.header{display:grid;grid-template-columns:1fr auto;align-items:start;gap:2rem;margin-bottom:3rem}
+@media(max-width:600px){.header{grid-template-columns:1fr}}
+.eyebrow{
+  display:inline-flex;align-items:center;gap:7px;
+  font-family:var(--display);font-size:10px;font-weight:700;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--green);
+  background:var(--green-bg);border:1px solid var(--green-border);
+  padding:5px 13px;border-radius:100px;margin-bottom:.9rem;
+}
+.eyebrow svg{width:8px;height:8px;fill:var(--green)}
+h1{font-family:var(--display);font-size:clamp(2.2rem,5vw,3.4rem);font-weight:800;line-height:1.05;letter-spacing:-.025em;margin-bottom:.7rem}
+h1 em{font-style:normal;color:var(--muted);font-weight:400}
+.subtitle{font-size:1rem;color:var(--muted);max-width:440px;line-height:1.7}
+
+.header-stats{display:flex;flex-direction:column;gap:8px;text-align:right}
+@media(max-width:600px){.header-stats{display:none}}
+.stat-pill{
+  display:inline-flex;align-items:center;gap:6px;justify-content:flex-end;
+  font-size:11px;color:var(--muted);
+}
+.stat-pill span{width:6px;height:6px;border-radius:50%;background:var(--green)}
+
+/* MODEL SELECTOR */
+.model-row{
+  display:flex;gap:6px;flex-wrap:wrap;margin-bottom:1.5rem;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:6px;
+}
+.model-btn{
+  flex:1;min-width:80px;background:transparent;
+  border:1px solid transparent;border-radius:6px;
+  font-family:var(--body);font-size:11px;font-weight:500;
+  padding:7px 10px;cursor:pointer;color:var(--muted);
+  transition:all .15s;text-align:center;
+}
+.model-btn.active{background:var(--text);color:var(--accent-inv);border-color:transparent}
+.model-btn:hover:not(.active){background:var(--surface2)}
+.model-label{display:block;font-size:9px;font-weight:400;opacity:.7;margin-top:1px}
+
+/* DROP ZONE */
+.drop-zone{
+  border:2px dashed var(--border2);border-radius:var(--radius);
+  padding:4.5rem 2rem;text-align:center;cursor:pointer;
+  background:var(--surface);transition:all .2s;
+  position:relative;overflow:hidden;margin-bottom:1.5rem;
+}
+.drop-zone::after{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(135deg,rgba(26,122,74,.04) 0%,transparent 60%);
+  opacity:0;transition:opacity .3s;pointer-events:none;
+}
+.drop-zone:hover::after,.drop-zone.dragover::after{opacity:1}
+.drop-zone:hover,.drop-zone.dragover{border-color:var(--green);background:var(--green-bg)}
+.drop-zone.dragover{transform:scale(1.01)}
+
+.drop-icon-wrap{
+  width:68px;height:68px;margin:0 auto 1.2rem;
+  background:var(--surface2);border:1px solid var(--border);
+  border-radius:18px;display:flex;align-items:center;justify-content:center;
+  font-size:28px;transition:transform .2s;
+}
+.drop-zone:hover .drop-icon-wrap{transform:translateY(-5px) rotate(-3deg)}
+.drop-title{font-family:var(--display);font-size:1.2rem;font-weight:700;margin-bottom:.4rem}
+.drop-sub{color:var(--muted);font-size:.9rem;margin-bottom:1.3rem}
+.drop-btn{
+  display:inline-flex;align-items:center;gap:8px;
+  background:var(--text);color:var(--accent-inv);
+  font-family:var(--display);font-weight:700;font-size:.85rem;
+  letter-spacing:.01em;padding:11px 24px;border-radius:var(--radius-sm);
+  border:none;cursor:pointer;transition:all .15s;
+}
+.drop-btn:hover{opacity:.85;transform:translateY(-1px)}
+.drop-btn:active{transform:translateY(0)}
+.fmt-tags{display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin-top:1.2rem}
+.fmt-tag{
+  background:var(--surface2);border:1px solid var(--border);
+  color:var(--muted);font-size:10px;font-family:monospace;
+  padding:3px 9px;border-radius:4px;letter-spacing:.04em;
+}
+
+/* BG COLOR PICKER */
+.bg-picker{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:.8rem 1.1rem;
+  margin-bottom:1.5rem;display:none;
+}
+.bg-picker.visible{display:flex}
+.bg-label{font-size:12px;font-weight:500;color:var(--muted);flex-shrink:0}
+.bg-swatch{
+  width:28px;height:28px;border-radius:50%;border:2px solid transparent;
+  cursor:pointer;transition:transform .15s;flex-shrink:0;
+}
+.bg-swatch:hover{transform:scale(1.15)}
+.bg-swatch.active{border-color:var(--text)}
+.bg-swatch.checker{
+  background-image:linear-gradient(45deg,#ccc 25%,transparent 25%),
+    linear-gradient(-45deg,#ccc 25%,transparent 25%),
+    linear-gradient(45deg,transparent 75%,#ccc 75%),
+    linear-gradient(-45deg,transparent 75%,#ccc 75%);
+  background-size:8px 8px;background-position:0 0,0 4px,4px -4px,-4px 0;
+  background-color:#fff;
+}
+.bg-custom-wrap{display:flex;align-items:center;gap:6px;margin-left:auto}
+.bg-custom-label{font-size:11px;color:var(--muted)}
+input[type="color"]{width:28px;height:28px;border:none;border-radius:50%;cursor:pointer;padding:0;background:none}
+
+/* PROCESS BUTTON */
+.process-btn{
+  width:100%;background:var(--text);color:var(--accent-inv);
+  font-family:var(--display);font-weight:700;font-size:1rem;
+  padding:15px;border-radius:var(--radius-sm);border:none;
+  cursor:pointer;transition:all .15s;
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  letter-spacing:.01em;margin-bottom:1.5rem;display:none;
+}
+.process-btn.visible{display:flex}
+.process-btn:hover{opacity:.85}
+.process-btn:disabled{opacity:.4;cursor:not-allowed}
+
+/* CARDS GRID */
+.cards-section{display:none}
+.cards-section.visible{display:block}
+.section-header{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:1rem;
+}
+.section-title{font-family:var(--display);font-size:1rem;font-weight:700}
+.queue-meta{font-size:11px;color:var(--muted)}
+.clear-all-btn{
+  background:none;border:1px solid var(--border);color:var(--muted);
+  font-family:var(--body);font-size:11px;padding:5px 12px;
+  border-radius:var(--radius-sm);cursor:pointer;transition:all .15s;
+}
+.clear-all-btn:hover{border-color:var(--red);color:var(--red)}
+
+.cards{display:flex;flex-direction:column;gap:10px}
+
+/* INDIVIDUAL CARD */
+.card{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:1rem 1.25rem;
+  animation:slideUp .3s ease;transition:border-color .2s;
+}
+.card.done{border-color:var(--green-border)}
+.card.error{border-color:rgba(192,57,43,.3)}
+@keyframes slideUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+
+.card-inner{display:grid;grid-template-columns:80px 1fr auto;gap:1rem;align-items:center}
+@media(max-width:560px){.card-inner{grid-template-columns:70px 1fr}}
+
+/* SHIMMER THUMB */
+.thumb-wrap{width:80px;height:60px;border-radius:8px;overflow:hidden;position:relative;flex-shrink:0}
+.thumb-shimmer{
+  width:100%;height:100%;background:var(--surface2);position:relative;overflow:hidden;
+}
+.thumb-shimmer::after{
+  content:'';position:absolute;inset:0;
+  background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.5) 50%,transparent 70%);
+  background-size:200% 100%;animation:shimmer 1.4s infinite;
+}
+@keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+.thumb-img{width:100%;height:100%;object-fit:cover;border-radius:8px;display:block}
+
+.card-info{min-width:0}
+.card-name{font-size:.9rem;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px}
+.card-meta-row{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:11px;color:var(--muted)}
+.badge-status{
+  font-size:10px;font-weight:500;padding:2px 8px;border-radius:4px;
+  background:var(--surface2);color:var(--muted);
+}
+.badge-status.processing{background:var(--amber-bg);color:var(--amber)}
+.badge-status.done{background:var(--green-bg);color:var(--green)}
+.badge-status.error{background:#fdf0ef;color:var(--red)}
+
+.progress-wrap{margin-top:8px;height:3px;background:var(--surface2);border-radius:100px;overflow:hidden}
+.progress-fill{height:100%;background:var(--text);border-radius:100px;width:0%;transition:width .4s ease}
+
+.card-actions{display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+@media(max-width:560px){.card-actions{grid-column:1/-1;flex-direction:row}}
+
+.dl-btn{
+  display:inline-flex;align-items:center;gap:5px;
+  background:var(--text);color:var(--accent-inv);
+  font-family:var(--display);font-weight:700;font-size:11px;
+  padding:7px 14px;border-radius:6px;border:none;cursor:pointer;
+  transition:all .15s;white-space:nowrap;text-decoration:none;
+}
+.dl-btn:hover{opacity:.8}
+.view-btn{
+  background:none;border:1px solid var(--border);color:var(--muted);
+  font-family:var(--body);font-size:11px;padding:5px 12px;
+  border-radius:6px;cursor:pointer;transition:all .15s;white-space:nowrap;
+}
+.view-btn:hover{border-color:var(--border2);color:var(--text)}
+
+/* DOWNLOAD ALL */
+.dl-all{
+  width:100%;margin-top:1rem;background:none;
+  border:1.5px solid var(--text);color:var(--text);
+  font-family:var(--display);font-weight:700;font-size:.95rem;
+  padding:13px;border-radius:var(--radius-sm);cursor:pointer;
+  transition:all .2s;display:flex;align-items:center;justify-content:center;gap:8px;
+}
+.dl-all:hover{background:var(--text);color:var(--accent-inv)}
+
+/* BEFORE/AFTER LIGHTBOX */
+.lb-backdrop{
+  display:none;position:fixed;inset:0;z-index:999;
+  background:rgba(26,25,22,.88);align-items:center;justify-content:center;padding:1.5rem;
+}
+.lb-backdrop.open{display:flex}
+.lb-box{
+  background:var(--surface);border:1px solid var(--border2);
+  border-radius:var(--radius);max-width:880px;width:100%;
+  overflow:hidden;animation:lbPop .2s ease;max-height:90vh;overflow-y:auto;
+}
+@keyframes lbPop{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
+.lb-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:1rem 1.5rem;border-bottom:1px solid var(--border);
+}
+.lb-title{font-family:var(--display);font-weight:700;font-size:.95rem}
+.lb-close{
+  width:30px;height:30px;background:var(--surface2);
+  border:1px solid var(--border);border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;font-size:15px;color:var(--muted);transition:all .15s;
+}
+.lb-close:hover{color:var(--text)}
+.lb-body{padding:1.5rem}
+
+/* BEFORE/AFTER COMPARE SLIDER */
+.compare-wrap{
+  position:relative;width:100%;height:320px;border-radius:10px;
+  overflow:hidden;user-select:none;cursor:ew-resize;margin-bottom:1rem;
+  background-image:linear-gradient(45deg,#ccc 25%,transparent 25%),
+    linear-gradient(-45deg,#ccc 25%,transparent 25%),
+    linear-gradient(45deg,transparent 75%,#ccc 75%),
+    linear-gradient(-45deg,transparent 75%,#ccc 75%);
+  background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0;
+  background-color:#f0f0f0;
+}
+.compare-before,.compare-after{
+  position:absolute;inset:0;
+}
+.compare-before img,.compare-after img{
+  width:100%;height:100%;object-fit:contain;display:block;
+}
+.compare-before{overflow:hidden}
+.compare-divider{
+  position:absolute;top:0;bottom:0;width:2px;background:#fff;
+  left:50%;transform:translateX(-50%);z-index:5;
+}
+.compare-handle{
+  position:absolute;top:50%;left:50%;
+  transform:translate(-50%,-50%);
+  width:36px;height:36px;background:#fff;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:16px;box-shadow:0 2px 8px rgba(0,0,0,.2);
+  z-index:6;pointer-events:none;font-weight:700;color:#555;
+}
+.compare-label-before,.compare-label-after{
+  position:absolute;bottom:12px;font-size:10px;font-weight:700;
+  letter-spacing:.06em;text-transform:uppercase;
+  background:rgba(26,25,22,.7);color:#fff;
+  padding:3px 9px;border-radius:4px;z-index:7;pointer-events:none;
+}
+.compare-label-before{left:12px}
+.compare-label-after{right:12px}
+
+.lb-stats{
+  display:flex;gap:1rem;flex-wrap:wrap;
+  padding:.9rem 1rem;background:var(--surface2);
+  border-radius:var(--radius-sm);margin-bottom:1rem;
+}
+.lb-stat .val{font-family:var(--display);font-size:1.15rem;font-weight:700;color:var(--text)}
+.lb-stat .lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+
+.lb-dl-btn{
+  width:100%;background:var(--text);color:var(--accent-inv);
+  font-family:var(--display);font-weight:700;font-size:.95rem;
+  padding:12px;border-radius:var(--radius-sm);border:none;cursor:pointer;
+  transition:all .15s;display:flex;align-items:center;justify-content:center;gap:8px;
+}
+.lb-dl-btn:hover{opacity:.85}
+
+/* BG FILL OPTIONS INSIDE LIGHTBOX */
+.lb-bg-row{display:flex;align-items:center;gap:8px;margin-bottom:1rem;flex-wrap:wrap}
+.lb-bg-label{font-size:11px;color:var(--muted);flex-shrink:0}
+.lb-swatch{
+  width:24px;height:24px;border-radius:50%;border:2px solid transparent;
+  cursor:pointer;transition:all .15s;flex-shrink:0;
+}
+.lb-swatch:hover{transform:scale(1.15)}
+.lb-swatch.active{border-color:var(--text)}
+
+/* FAQ */
+.faq{margin-top:5rem;border-top:1px solid var(--border);padding-top:3rem}
+.faq h2{font-family:var(--display);font-size:1.5rem;font-weight:800;margin-bottom:1.5rem}
+.faq-item{margin-bottom:1.4rem}
+.faq-q{font-weight:500;margin-bottom:.3rem}
+.faq-a{color:var(--muted);font-size:.95rem;line-height:1.7}
+
+/* WASM LOADING OVERLAY ON FIRST USE */
+.wasm-banner{
+  background:var(--amber-bg);border:1px solid #f5c842;
+  border-radius:var(--radius-sm);padding:.8rem 1.1rem;
+  font-size:12px;color:var(--amber);margin-bottom:1rem;
+  display:flex;align-items:center;gap:8px;
+}
+.wasm-spinner{
+  width:14px;height:14px;border:2px solid rgba(154,107,0,.3);
+  border-top-color:var(--amber);border-radius:50%;
+  animation:spin .7s linear infinite;flex-shrink:0;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+@media(max-width:600px){
+  .card-inner{grid-template-columns:60px 1fr}
+  .thumb-wrap{width:60px;height:45px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div>
+      <div class="eyebrow">
+        <svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="4"/></svg>
+        AI · Browser-based · Zero Upload
+      </div>
+      <h1>Background<br><em>Remover</em></h1>
+      <p class="subtitle">AI removes backgrounds instantly in your browser. No server, no signup, no limits. Your images stay on your device.</p>
+    </div>
+    <div class="header-stats">
+      <div class="stat-pill"><span></span> No server upload</div>
+      <div class="stat-pill"><span></span> Unlimited images</div>
+      <div class="stat-pill"><span></span> 100% private</div>
+      <div class="stat-pill"><span></span> Free forever</div>
+    </div>
+  </div>
+
+  <!-- MODEL SELECTOR -->
+  <div class="model-row" id="modelRow">
+    <button class="model-btn active" data-model="isnet_fp16">
+      Best Quality
+      <span class="model-label">isnet_fp16 · 2–4s</span>
+    </button>
+    <button class="model-btn" data-model="isnet_quint8">
+      Balanced
+      <span class="model-label">isnet_quint8 · 1–3s</span>
+    </button>
+    <button class="model-btn" data-model="u2net">
+      Fast
+      <span class="model-label">u2net · &lt;1s</span>
+    </button>
+    <button class="model-btn" data-model="u2netp">
+      Mobile
+      <span class="model-label">u2netp · fastest</span>
+    </button>
+  </div>
+
+  <!-- WASM FIRST-LOAD BANNER (shown once) -->
+  <div class="wasm-banner" id="wasmBanner" style="display:none">
+    <div class="wasm-spinner"></div>
+    <span>AI model loading (first time only, ~30–40MB). Cached after this — instant forever.</span>
+  </div>
+
+  <!-- DROP ZONE -->
+  <div class="drop-zone" id="dropZone">
+    <div class="drop-icon-wrap">✂️</div>
+    <p class="drop-title">Drop images to remove background</p>
+    <p class="drop-sub">or browse and select files — processed locally on your device</p>
+    <button class="drop-btn" onclick="fileInput.click()">📁 Choose Images</button>
+    <div class="fmt-tags">
+      <span class="fmt-tag">JPG</span>
+      <span class="fmt-tag">PNG</span>
+      <span class="fmt-tag">WebP</span>
+      <span class="fmt-tag">AVIF</span>
+      <span class="fmt-tag">BMP</span>
+    </div>
+    <input type="file" id="fileInput" accept="image/*" multiple style="display:none">
+  </div>
+
+  <!-- BG COLOR PICKER -->
+  <div class="bg-picker" id="bgPicker">
+    <span class="bg-label">Output background:</span>
+    <div class="bg-swatch checker active" data-bg="transparent" title="Transparent (PNG)"></div>
+    <div class="bg-swatch active" data-bg="#ffffff" style="background:#ffffff;border:1px solid #ddd" title="White"></div>
+    <div class="bg-swatch" data-bg="#000000" style="background:#000000" title="Black"></div>
+    <div class="bg-swatch" data-bg="#f0f0f0" style="background:#f0f0f0;border:1px solid #ddd" title="Light gray"></div>
+    <div class="bg-swatch" data-bg="#1a73e8" style="background:#1a73e8" title="Blue"></div>
+    <div class="bg-swatch" data-bg="#2ecc71" style="background:#2ecc71" title="Green"></div>
+    <div class="bg-swatch" data-bg="#e74c3c" style="background:#e74c3c" title="Red"></div>
+    <div class="bg-custom-wrap">
+      <span class="bg-custom-label">Custom:</span>
+      <input type="color" id="customBg" value="#ff6b6b" title="Pick custom color">
+    </div>
+  </div>
+
+  <!-- PROCESS BUTTON -->
+  <button class="process-btn" id="processBtn">
+    ✂️ Remove Backgrounds
+  </button>
+
+  <!-- CARDS -->
+  <div class="cards-section" id="cardsSection">
+    <div class="section-header">
+      <div>
+        <span class="section-title">Images</span>
+        <span class="queue-meta" id="queueMeta" style="font-size:12px;color:var(--muted);margin-left:8px"></span>
+      </div>
+      <button class="clear-all-btn" onclick="clearAll()">Clear All</button>
+    </div>
+    <div class="cards" id="cardsContainer"></div>
+    <button class="dl-all" id="dlAllBtn" style="display:none" onclick="downloadAll()">
+      ⬇️ Download All as PNG
+    </button>
+  </div>
+
+  <!-- FAQ -->
+  <div class="faq">
+    <h2>Frequently Asked Questions</h2>
+    <div class="faq-item">
+      <p class="faq-q">Are my images uploaded to a server?</p>
+      <p class="faq-a">No. The AI model runs entirely in your browser using WebAssembly. Your images never leave your device. This is completely private — no server logs, no data collection.</p>
+    </div>
+    <div class="faq-item">
+      <p class="faq-q">Why is it slow on first use?</p>
+      <p class="faq-a">The AI model (~30–40MB) downloads from a CDN and gets cached in your browser. After the first use, it loads instantly from cache — no download needed again.</p>
+    </div>
+    <div class="faq-item">
+      <p class="faq-q">Which model should I use?</p>
+      <p class="faq-a">"Best Quality" (isnet_fp16) for portraits, hair detail, and complex edges. "Balanced" for everyday product images. "Fast" or "Mobile" for batch processing or slower devices.</p>
+    </div>
+    <div class="faq-item">
+      <p class="faq-q">What file format is the output?</p>
+      <p class="faq-a">Transparent background downloads as PNG (alpha channel). If you choose a background color, it exports as PNG with that solid fill. JPEG output is not supported since JPEG doesn't support transparency.</p>
+    </div>
+    <div class="faq-item">
+      <p class="faq-q">Is there a file size or image count limit?</p>
+      <p class="faq-a">No hard limits. Processing is limited only by your device's RAM. Very large images (20MP+) may be slower — the tool auto-caps preview at 1080px for speed while keeping the output at original resolution.</p>
+    </div>
+    <div class="faq-item">
+      <p class="faq-q">Does it work on mobile?</p>
+      <p class="faq-a">Yes, but use the "Mobile" or "Fast" model on phones for best performance. The isnet models are optimised for desktop CPUs and may take 15–30s on older mobile devices.</p>
+    </div>
+  </div>
+</div>
+
+<!-- LIGHTBOX -->
+<div class="lb-backdrop" id="lightbox" onclick="closeLb(event)">
+  <div class="lb-box">
+    <div class="lb-head">
+      <span class="lb-title" id="lbTitle">Before / After</span>
+      <div class="lb-close" onclick="closeLb(null,true)">✕</div>
+    </div>
+    <div class="lb-body">
+      <!-- BG picker inside lightbox -->
+      <div class="lb-bg-row">
+        <span class="lb-bg-label">Preview background:</span>
+        <div class="lb-swatch checker active" data-lbbg="checker" title="Checker"></div>
+        <div class="lb-swatch" data-lbbg="#ffffff" style="background:#fff;border:1px solid #ddd" title="White"></div>
+        <div class="lb-swatch" data-lbbg="#000000" style="background:#000" title="Black"></div>
+        <div class="lb-swatch" data-lbbg="#1a73e8" style="background:#1a73e8" title="Blue"></div>
+        <div class="lb-swatch" data-lbbg="#2ecc71" style="background:#2ecc71" title="Green"></div>
+      </div>
+      <!-- Compare slider -->
+      <div class="compare-wrap" id="compareWrap">
+        <div class="compare-after"><img id="lbAfterImg" src="" alt="Background removed"></div>
+        <div class="compare-before" id="lbBeforeWrap" style="width:50%">
+          <img id="lbBeforeImg" src="" alt="Original" style="width:100%;height:100%;object-fit:contain">
+        </div>
+        <div class="compare-divider" id="compareDivider" style="left:50%"></div>
+        <div class="compare-handle" id="compareHandle" style="left:50%">⇄</div>
+        <div class="compare-label-before">Before</div>
+        <div class="compare-label-after">After</div>
+      </div>
+      <!-- Stats -->
+      <div class="lb-stats" id="lbStats"></div>
+      <!-- Download -->
+      <button class="lb-dl-btn" id="lbDlBtn">⬇️ Download PNG</button>
+    </div>
+  </div>
+</div>
+
+<!-- @imgly/background-removal via CDN (ESM) -->
+<script type="module">
+// ---- State ----
+let images = [];
+let results = {}; // idx → { blob, origBlob, origUrl }
+let selectedModel = 'isnet_fp16';
+let selectedBg = 'transparent';
+let wasmLoaded = false;
+let bgRemoval = null;
+
+// ---- DOM refs ----
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+const processBtn = document.getElementById('processBtn');
+const cardsSection = document.getElementById('cardsSection');
+const cardsContainer = document.getElementById('cardsContainer');
+const dlAllBtn = document.getElementById('dlAllBtn');
+const bgPicker = document.getElementById('bgPicker');
+const wasmBanner = document.getElementById('wasmBanner');
+
+// ---- Model selector ----
+document.querySelectorAll('.model-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.model-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    selectedModel = btn.dataset.model;
+  });
+});
+
+// ---- BG swatch selector ----
+document.querySelectorAll('.bg-swatch').forEach(sw => {
+  sw.addEventListener('click', () => {
+    document.querySelectorAll('.bg-swatch').forEach(s => s.classList.remove('active'));
+    sw.classList.add('active');
+    selectedBg = sw.dataset.bg;
+  });
+});
+document.getElementById('customBg').addEventListener('input', e => {
+  document.querySelectorAll('.bg-swatch').forEach(s => s.classList.remove('active'));
+  selectedBg = e.target.value;
+});
+
+// ---- Drop zone ----
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('dragover');
+  addFiles([...e.dataTransfer.files]);
+});
+dropZone.addEventListener('click', e => {
+  if (!e.target.closest('.drop-btn')) fileInput.click();
+});
+fileInput.addEventListener('change', () => addFiles([...fileInput.files]));
+
+function addFiles(files) {
+  const imgs = files.filter(f => f.type.startsWith('image/'));
+  if (!imgs.length) return;
+  imgs.forEach(f => {
+    if (!images.find(i => i.name === f.name && i.size === f.size)) images.push(f);
+  });
+  bgPicker.classList.add('visible');
+  processBtn.classList.add('visible');
+  cardsSection.classList.add('visible');
+  results = {};
+  dlAllBtn.style.display = 'none';
+  renderCards();
+}
+
+// ---- Render cards ----
+function fmtBytes(b) {
+  if (b < 1024) return b + 'B';
+  if (b < 1048576) return (b/1024).toFixed(1) + 'KB';
+  return (b/1048576).toFixed(2) + 'MB';
+}
+
+function renderCards() {
+  cardsContainer.innerHTML = '';
+  document.getElementById('queueMeta').textContent = images.length + ' file' + (images.length !== 1 ? 's' : '');
+  images.forEach((file, i) => {
+    const origUrl = URL.createObjectURL(file);
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.id = 'card-' + i;
+    card.innerHTML = `
+      <div class="card-inner">
+        <div class="thumb-wrap">
+          <div class="thumb-shimmer" id="thumb-${i}"></div>
+        </div>
+        <div class="card-info">
+          <div class="card-name" title="${file.name}">${file.name}</div>
+          <div class="card-meta-row">
+            <span>${fmtBytes(file.size)}</span>
+            <span class="badge-status" id="badge-${i}">Waiting</span>
+          </div>
+          <div class="progress-wrap" id="pw-${i}" style="display:none">
+            <div class="progress-fill" id="pf-${i}"></div>
+          </div>
+        </div>
+        <div class="card-actions" id="actions-${i}">
+          <button class="view-btn" disabled id="viewbtn-${i}">View</button>
+        </div>
+      </div>
+    `;
+    cardsContainer.appendChild(card);
+    // Load thumb
+    const img = new Image();
+    img.onload = () => {
+      const wrap = document.getElementById('thumb-' + i);
+      if (wrap) { wrap.className = 'thumb-img-wrap'; wrap.innerHTML = `<img class="thumb-img" src="${origUrl}" alt="">`; }
+    };
+    img.src = origUrl;
+  });
+}
+
+// ---- Process ----
+processBtn.addEventListener('click', async () => {
+  if (!images.length) return;
+  processBtn.disabled = true;
+  processBtn.textContent = '⏳ Processing...';
+  results = {};
+  dlAllBtn.style.display = 'none';
+
+  // Load @imgly library dynamically
+  if (!bgRemoval) {
+    wasmBanner.style.display = 'flex';
+    try {
+      const mod = await import('https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.4.5/dist/background-removal.js');
+      bgRemoval = mod;
+      wasmLoaded = true;
+    } catch(e) {
+      wasmBanner.style.display = 'none';
+      alert('Failed to load AI model. Check your internet connection.');
+      processBtn.disabled = false;
+      processBtn.textContent = '✂️ Remove Backgrounds';
+      return;
+    }
+    wasmBanner.style.display = 'none';
+  }
+
+  let done = 0;
+  for (let i = 0; i < images.length; i++) {
+    await processImage(i);
+    done++;
+    if (done === images.length) {
+      processBtn.disabled = false;
+      processBtn.innerHTML = '✅ Done! Process Again';
+      dlAllBtn.style.display = 'flex';
+    }
+  }
+});
+
+async function processImage(i) {
+  const file = images[i];
+  const origUrl = URL.createObjectURL(file);
+
+  // Update UI → processing
+  const badge = document.getElementById('badge-' + i);
+  const pw = document.getElementById('pw-' + i);
+  const pf = document.getElementById('pf-' + i);
+  badge.className = 'badge-status processing';
+  badge.textContent = 'Processing...';
+  pw.style.display = 'block';
+
+  // Fake progress animation
+  let prog = 0;
+  const progInterval = setInterval(() => {
+    prog = Math.min(prog + Math.random() * 8, 88);
+    if (pf) pf.style.width = prog + '%';
+  }, 200);
+
+  try {
+    const config = {
+      model: selectedModel,
+      output: { format: 'image/png', quality: 1 },
+    };
+    // @imgly returns a Blob
+    const blob = await bgRemoval.removeBackground(file, config);
+
+    clearInterval(progInterval);
+    if (pf) pf.style.width = '100%';
+
+    // Apply background color if not transparent
+    let finalBlob = blob;
+    if (selectedBg && selectedBg !== 'transparent') {
+      finalBlob = await applyBackground(blob, selectedBg);
+    }
+
+    results[i] = { blob: finalBlob, origUrl, origBlob: file };
+    setCardDone(i, file, finalBlob, origUrl);
+  } catch(err) {
+    clearInterval(progInterval);
+    badge.className = 'badge-status error';
+    badge.textContent = 'Error';
+    if (pf) pf.style.width = '0%';
+    document.getElementById('card-' + i).classList.add('error');
+    console.error('BG removal failed:', err);
+  }
+}
+
+// Apply solid background to transparent PNG
+async function applyBackground(pngBlob, color) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width; canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = color;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob(resolve, 'image/png', 1);
+      URL.revokeObjectURL(img.src);
+    };
+    img.src = URL.createObjectURL(pngBlob);
+  });
+}
+
+function setCardDone(i, file, blob, origUrl) {
+  const badge = document.getElementById('badge-' + i);
+  badge.className = 'badge-status done';
+  badge.textContent = 'Done ✓';
+  document.getElementById('card-' + i).classList.add('done');
+  const pf = document.getElementById('pf-' + i);
+  setTimeout(() => { if(pf) pf.closest('.progress-wrap').style.display = 'none'; }, 600);
+
+  const blobUrl = URL.createObjectURL(blob);
+  const outName = file.name.replace(/\.[^/.]+$/, '') + '_nobg.png';
+  const actions = document.getElementById('actions-' + i);
+  actions.innerHTML = `
+    <a class="dl-btn" href="${blobUrl}" download="${outName}">⬇️ Save PNG</a>
+    <button class="view-btn" onclick="openLb(${i})">Before/After</button>
+  `;
+}
+
+// ---- Download all ----
+function downloadAll() {
+  Object.keys(results).forEach((k, idx) => {
+    setTimeout(() => {
+      const file = images[k];
+      const { blob } = results[k];
+      const name = file.name.replace(/\.[^/.]+$/, '') + '_nobg.png';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = name; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }, idx * 350);
+  });
+}
+
+// ---- Clear all ----
+function clearAll() {
+  images = []; results = {};
+  cardsContainer.innerHTML = '';
+  bgPicker.classList.remove('visible');
+  processBtn.classList.remove('visible');
+  cardsSection.classList.remove('visible');
+  dlAllBtn.style.display = 'none';
+  processBtn.disabled = false;
+  processBtn.innerHTML = '✂️ Remove Backgrounds';
+  fileInput.value = '';
+}
+
+// Make clearAll + downloadAll global
+window.clearAll = clearAll;
+window.downloadAll = downloadAll;
+
+// ---- LIGHTBOX ----
+let currentLbIdx = null;
+let lbBg = 'checker';
+
+window.openLb = function(i) {
+  const r = results[i];
+  if (!r) return;
+  currentLbIdx = i;
+  const file = images[i];
+  document.getElementById('lbTitle').textContent = file.name;
+  document.getElementById('lbBeforeImg').src = r.origUrl;
+  document.getElementById('lbAfterImg').src = URL.createObjectURL(r.blob);
+
+  // Stats
+  document.getElementById('lbStats').innerHTML = `
+    <div class="lb-stat"><div class="val">${fmtBytes(file.size)}</div><div class="lbl">Original</div></div>
+    <div class="lb-stat"><div class="val">${fmtBytes(r.blob.size)}</div><div class="lbl">Output size</div></div>
+    <div class="lb-stat"><div class="val">${selectedModel}</div><div class="lbl">Model used</div></div>
+  `;
+
+  // Download btn
+  const outName = file.name.replace(/\.[^/.]+$/, '') + '_nobg.png';
+  const blobUrl = URL.createObjectURL(r.blob);
+  document.getElementById('lbDlBtn').onclick = () => {
+    const a = document.createElement('a'); a.href = blobUrl; a.download = outName; a.click();
+  };
+
+  applyLbBg('checker');
+  document.getElementById('lightbox').classList.add('open');
+  initSlider();
+};
+
+// LB background swatches
+document.querySelectorAll('.lb-swatch').forEach(sw => {
+  sw.addEventListener('click', () => {
+    document.querySelectorAll('.lb-swatch').forEach(s => s.classList.remove('active'));
+    sw.classList.add('active');
+    applyLbBg(sw.dataset.lbbg);
+  });
+});
+
+function applyLbBg(bg) {
+  lbBg = bg;
+  const wrap = document.getElementById('compareWrap');
+  if (bg === 'checker') {
+    wrap.style.backgroundColor = '#f0f0f0';
+    wrap.style.backgroundImage = `
+      linear-gradient(45deg,#ccc 25%,transparent 25%),
+      linear-gradient(-45deg,#ccc 25%,transparent 25%),
+      linear-gradient(45deg,transparent 75%,#ccc 75%),
+      linear-gradient(-45deg,transparent 75%,#ccc 75%)`;
+    wrap.style.backgroundSize = '20px 20px';
+    wrap.style.backgroundPosition = '0 0,0 10px,10px -10px,-10px 0';
+  } else {
+    wrap.style.backgroundImage = 'none';
+    wrap.style.backgroundColor = bg;
+    wrap.style.backgroundSize = '';
+    wrap.style.backgroundPosition = '';
+  }
+}
+
+window.closeLb = function(e, force) {
+  if (force || (e && e.target === document.getElementById('lightbox'))) {
+    document.getElementById('lightbox').classList.remove('open');
+  }
+};
+document.addEventListener('keydown', e => { if (e.key === 'Escape') document.getElementById('lightbox').classList.remove('open'); });
+
+// ---- Before/After slider ----
+function initSlider() {
+  const wrap = document.getElementById('compareWrap');
+  const before = document.getElementById('lbBeforeWrap');
+  const divider = document.getElementById('compareDivider');
+  const handle = document.getElementById('compareHandle');
+  let dragging = false;
+
+  function setPos(x) {
+    const rect = wrap.getBoundingClientRect();
+    let pct = Math.max(0, Math.min(100, ((x - rect.left) / rect.width) * 100));
+    before.style.width = pct + '%';
+    divider.style.left = pct + '%';
+    handle.style.left = pct + '%';
+  }
+
+  wrap.addEventListener('mousedown', e => { dragging = true; setPos(e.clientX); });
+  window.addEventListener('mousemove', e => { if (dragging) setPos(e.clientX); });
+  window.addEventListener('mouseup', () => { dragging = false; });
+  wrap.addEventListener('touchstart', e => { dragging = true; setPos(e.touches[0].clientX); }, {passive:true});
+  window.addEventListener('touchmove', e => { if (dragging) setPos(e.touches[0].clientX); }, {passive:true});
+  window.addEventListener('touchend', () => { dragging = false; });
+}
+</script>
+</body>
+</html>
