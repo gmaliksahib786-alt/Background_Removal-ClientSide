@@ -499,15 +499,91 @@ env.allowRemoteModels = true;
 env.useBrowserCache   = true;
 env.backends.onnx.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/';
 
-// ---- State ----
-let images        = [];
-let results       = {};
-let selectedBg    = 'transparent';
-let selectedQuality = 'isnet_fp16';
-let pipe          = null;
-let modelLoading  = false;
 
-// ---- DOM refs ----
+<!-- LIGHTBOX -->
+<div class="lb-backdrop" id="lightbox" onclick="closeLb(event)">
+  <div class="lb-box">
+    <div class="lb-head">
+      <div class="lb-title-wrap">
+        <span class="lb-title" id="lbTitle">Before / After</span>
+        <span class="lb-subtitle">Drag the slider to compare</span>
+      </div>
+      <div class="lb-close" onclick="closeLb(null,true)">✕</div>
+    </div>
+    <div class="lb-body">
+      <div class="lb-bg-row">
+        <span class="lb-bg-label">Preview BG</span>
+        <div class="lb-swatch checker active" data-lbbg="checker"></div>
+        <div class="lb-swatch" data-lbbg="#ffffff" style="background:#fff;border:1px solid #ddd"></div>
+        <div class="lb-swatch" data-lbbg="#000000" style="background:#000"></div>
+        <div class="lb-swatch" data-lbbg="#1a73e8" style="background:#1a73e8"></div>
+        <div class="lb-swatch" data-lbbg="#2ecc71" style="background:#2ecc71"></div>
+        <div class="lb-swatch" data-lbbg="#e74c3c" style="background:#e74c3c"></div>
+      </div>
+      <div class="compare-outer" id="compareOuter">
+        <div class="compare-wrap" id="compareWrap">
+          <div class="compare-after"><img id="lbAfterImg" src="" alt="Removed bg"></div>
+          <div class="compare-before" id="lbBeforeWrap" style="width:50%">
+            <img id="lbBeforeImg" src="" alt="Original" style="width:100%;height:100%;object-fit:contain;display:block">
+          </div>
+          <div class="compare-divider" id="compareDivider" style="left:50%"></div>
+          <div class="compare-handle" id="compareHandle" style="left:50%">
+            <svg viewBox="0 0 24 24"><path d="M8 5l-5 7 5 7M16 5l5 7-5 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+          </div>
+          <div class="compare-label-before">Before</div>
+          <div class="compare-label-after">After</div>
+        </div>
+      </div>
+      <div class="lb-stats" id="lbStats"></div>
+      <button class="lb-dl-btn" id="lbDlBtn">⬇️ Download PNG</button>
+    </div>
+  </div>
+</div>
+
+<!--
+  KEY INSIGHT (Senior Dev Note):
+  ─────────────────────────────
+  @imgly/background-removal hosts its own WASM+ONNX on unpkg.
+  It CANNOT be imported as bare ESM in browser — needs a bundler.
+  
+  SOLUTION: Use skypack.dev CDN which pre-bundles npm packages
+  for browser use, resolving all bare specifiers automatically.
+  publicPath must point to unpkg where WASM/ONNX assets live.
+  
+  _headers MUST have:
+    Cross-Origin-Opener-Policy: same-origin
+    Cross-Origin-Embedder-Policy: require-corp
+  (SharedArrayBuffer requirement for WASM threads)
+-->
+<script type="module">
+// skypack pre-bundles @imgly/background-removal for direct browser use
+import { removeBackground } from 'https://cdn.skypack.dev/@imgly/background-removal@1.5.5';
+
+// ─── WASM + ONNX assets served from unpkg (official host) ───
+const IMGLY_CONFIG = {
+  publicPath: 'https://unpkg.com/@imgly/background-removal@1.5.5/dist/',
+  model: 'medium',  // medium = best quality/speed balance
+  output: { format: 'image/png', quality: 1 },
+  progress: (key, cur, total) => {
+    if (!total) return;
+    const pct = Math.round(30 + (cur / total) * 65);
+    if (mloBar) mloBar.style.width = Math.min(pct, 95) + '%';
+    if (mloStatus) {
+      const mb  = (cur   / 1048576).toFixed(1);
+      const tot = (total / 1048576).toFixed(1);
+      mloStatus.textContent = `${mb} MB / ${tot} MB`;
+    }
+  }
+};
+
+// ─── State ───
+let images       = [];
+let results      = {};
+let selectedBg   = 'transparent';
+let modelReady   = false;
+let modelLoading = false;
+
+// ─── DOM ───
 const dropZone      = document.getElementById('dropZone');
 const fileInput     = document.getElementById('fileInput');
 const processBtn    = document.getElementById('processBtn');
@@ -520,17 +596,17 @@ const mloBar        = document.getElementById('mloBar');
 const mloStatus     = document.getElementById('mloStatus');
 const mloSub        = document.getElementById('mloSub');
 
-// ---- Model selector ----
+// ─── Model selector (controls quality config) ───
 document.querySelectorAll('.model-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.model-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    selectedQuality = btn.dataset.model;
-    pipe = null; // reset so next run reloads
+    const map = { isnet_fp16: 'large', isnet_quint8: 'medium', u2net: 'small', u2netp: 'small' };
+    IMGLY_CONFIG.model = map[btn.dataset.model] || 'medium';
   });
 });
 
-// ---- BG swatch ----
+// ─── BG picker ───
 document.querySelectorAll('.bg-swatch').forEach(sw => {
   sw.addEventListener('click', () => {
     document.querySelectorAll('.bg-swatch').forEach(s => s.classList.remove('active'));
@@ -543,45 +619,70 @@ document.getElementById('customBg').addEventListener('input', e => {
   selectedBg = e.target.value;
 });
 
-// ---- Drop zone ----
+// ─── Drop zone ───
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-dropZone.addEventListener('drop', e => {
-  e.preventDefault(); dropZone.classList.remove('dragover');
-  addFiles([...e.dataTransfer.files]);
-});
+dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('dragover'); addFiles([...e.dataTransfer.files]); });
 dropZone.addEventListener('click', e => { if (!e.target.closest('.drop-btn')) fileInput.click(); });
 fileInput.addEventListener('change', () => addFiles([...fileInput.files]));
 
 function addFiles(files) {
   const imgs = files.filter(f => f.type.startsWith('image/'));
   if (!imgs.length) return;
-  imgs.forEach(f => { if (!images.find(i => i.name === f.name && i.size === f.size)) images.push(f); });
+  imgs.forEach(f => { if (!images.find(x => x.name === f.name && x.size === f.size)) images.push(f); });
   bgPicker.classList.add('visible');
   processBtn.classList.add('visible');
   cardsSection.classList.add('visible');
   results = {};
   dlAllBtn.style.display = 'none';
   renderCards();
-  // Preload model in background
-  if (!pipe && !modelLoading) loadModel(true);
+  // Trigger warm-up download in background (first image only)
+  if (!modelReady && !modelLoading) warmupModel();
+}
+
+// ─── Warm-up: run removeBackground on 1x1 blank to cache WASM+ONNX ───
+async function warmupModel() {
+  modelLoading = true;
+  modelOverlay.classList.add('show');
+  if (mloSub) mloSub.textContent = 'Downloading AI model (first time only ~40MB, cached forever)';
+  if (mloBar) mloBar.style.width = '5%';
+  if (mloStatus) mloStatus.textContent = 'Starting download...';
+
+  try {
+    // Create a tiny 4x4 transparent PNG to trigger model download
+    const c = document.createElement('canvas'); c.width = 4; c.height = 4;
+    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+    await removeBackground(blob, IMGLY_CONFIG); // this downloads & caches all assets
+
+    if (mloBar) mloBar.style.width = '100%';
+    if (mloStatus) mloStatus.textContent = '✅ Ready!';
+    await new Promise(r => setTimeout(r, 500));
+    modelOverlay.classList.remove('show');
+    modelReady   = true;
+    modelLoading = false;
+  } catch (err) {
+    console.error('Warmup failed:', err);
+    if (mloSub)    mloSub.textContent    = '❌ Model load failed. Retry.';
+    if (mloStatus) mloStatus.textContent = err.message?.slice(0, 60) || 'Error';
+    modelLoading = false;
+    setTimeout(() => modelOverlay.classList.remove('show'), 4000);
+  }
 }
 
 function fmtBytes(b) {
   if (b < 1024) return b + 'B';
-  if (b < 1048576) return (b/1024).toFixed(1) + 'KB';
-  return (b/1048576).toFixed(2) + 'MB';
+  if (b < 1048576) return (b / 1024).toFixed(1) + 'KB';
+  return (b / 1048576).toFixed(2) + 'MB';
 }
 
-// ---- Render cards ----
+// ─── Render cards ───
 function renderCards() {
   cardsContainer.innerHTML = '';
   document.getElementById('queueMeta').textContent = images.length + ' file' + (images.length !== 1 ? 's' : '');
   images.forEach((file, i) => {
     const origUrl = URL.createObjectURL(file);
     const card = document.createElement('div');
-    card.className = 'card';
-    card.id = 'card-' + i;
+    card.className = 'card'; card.id = 'card-' + i;
     card.innerHTML = `
       <div class="card-inner">
         <div class="thumb-wrap" id="thumb-${i}"><div class="thumb-shimmer"></div></div>
@@ -603,93 +704,22 @@ function renderCards() {
     cardsContainer.appendChild(card);
     const img = new Image();
     img.onload = () => {
-      const wrap = document.getElementById('thumb-' + i);
-      if (wrap) wrap.innerHTML = `<img class="thumb-inner" src="${origUrl}" alt="">`;
+      const w = document.getElementById('thumb-' + i);
+      if (w) w.innerHTML = `<img class="thumb-inner" src="${origUrl}" alt="">`;
     };
     img.src = origUrl;
   });
 }
 
-// ---- Animated progress bar ----
-let barInterval = null;
-function startBarAnim(from, to, speed) {
-  clearInterval(barInterval);
-  let v = from;
-  const msgs = [
-    'Fetching model weights...', 'Loading ONNX runtime...',
-    'Initializing RMBG-1.4...', 'Warming up AI engine...'
-  ];
-  let mi = 0;
-  barInterval = setInterval(() => {
-    v = Math.min(v + speed, to);
-    if (mloBar) mloBar.style.width = v + '%';
-    if (mloStatus) mloStatus.textContent = Math.round(v) + '% — ' + msgs[Math.min(mi, msgs.length - 1)];
-    if (v % 22 < speed && v > from + 5) mi = Math.min(mi + 1, msgs.length - 1);
-    if (v >= to) clearInterval(barInterval);
-  }, 80);
+// ─── Stage text helper ───
+function setStage(i, txt, pct) {
+  const el = document.getElementById('stage-' + i);
+  const pf = document.getElementById('pf-' + i);
+  if (el) el.textContent = txt;
+  if (pf && pct !== undefined) pf.style.width = pct + '%';
 }
 
-// ---- Load model ----
-async function loadModel(silent = false) {
-  if (pipe) return true;
-  if (modelLoading) { while (modelLoading) await new Promise(r => setTimeout(r, 100)); return !!pipe; }
-  modelLoading = true;
-
-  if (!silent || true) { // always show overlay
-    modelOverlay.classList.add('show');
-    startBarAnim(0, 40, 0.6);
-  }
-
-  try {
-    // Use image-segmentation pipeline — handles CORS automatically
-    // Xenova mirror has CORS headers, direct HF does not
-    pipe = await pipeline(
-      'image-segmentation',
-      'Xenova/modnet',
-      {
-        device: 'wasm',
-        dtype: 'q8',
-        progress_callback: (p) => {
-          if (p.status === 'downloading' && p.total) {
-            const pct = Math.round(30 + (p.loaded / p.total) * 60);
-            if (mloBar) mloBar.style.width = pct + '%';
-            if (mloStatus) {
-              const mb = (p.loaded / 1048576).toFixed(1);
-              const tot = (p.total / 1048576).toFixed(1);
-              mloStatus.textContent = `${mb}MB / ${tot}MB downloaded`;
-            }
-          }
-          if (p.status === 'ready') {
-            if (mloBar) mloBar.style.width = '98%';
-            if (mloStatus) mloStatus.textContent = 'Model loaded — starting...';
-          }
-        }
-      }
-    );
-
-    clearInterval(barInterval);
-    if (mloBar) mloBar.style.width = '100%';
-    if (mloStatus) mloStatus.textContent = '✅ Ready!';
-    await new Promise(r => setTimeout(r, 500));
-    modelOverlay.classList.remove('show');
-    modelLoading = false;
-    return true;
-
-  } catch (err) {
-    clearInterval(barInterval);
-    console.error('Model load failed:', err);
-    if (mloSub) mloSub.textContent = '❌ Failed to load. Check your connection & retry.';
-    if (mloStatus) mloStatus.textContent = 'Error — see console.';
-    if (mloBar) mloBar.style.width = '0%';
-    modelLoading = false;
-    pipe = null;
-    // Hide overlay after 3s so user can retry
-    setTimeout(() => modelOverlay.classList.remove('show'), 3000);
-    return false;
-  }
-}
-
-// ---- Process button ----
+// ─── Process button ───
 processBtn.addEventListener('click', async () => {
   if (!images.length) return;
   processBtn.disabled = true;
@@ -698,17 +728,19 @@ processBtn.addEventListener('click', async () => {
   results = {};
   dlAllBtn.style.display = 'none';
 
-  const ok = await loadModel(false);
-  if (!ok) {
-    processBtn.disabled = false;
-    processBtn.classList.remove('running');
-    processBtn.innerHTML = '✂️ Remove Backgrounds';
-    return;
+  // If model not ready yet, show overlay and wait
+  if (!modelReady) {
+    if (!modelLoading) warmupModel();
+    while (modelLoading) await new Promise(r => setTimeout(r, 200));
+    if (!modelReady) {
+      processBtn.disabled = false;
+      processBtn.classList.remove('running');
+      processBtn.innerHTML = '✂️ Remove Backgrounds';
+      return;
+    }
   }
 
-  for (let i = 0; i < images.length; i++) {
-    await processOne(i);
-  }
+  for (let i = 0; i < images.length; i++) await processOne(i);
 
   processBtn.disabled = false;
   processBtn.classList.remove('running');
@@ -716,127 +748,92 @@ processBtn.addEventListener('click', async () => {
   dlAllBtn.style.display = 'flex';
 });
 
-// ---- Stage text helper ----
-function setStage(i, txt, pct) {
-  const el = document.getElementById('stage-' + i);
-  const pf = document.getElementById('pf-' + i);
-  if (el) el.textContent = txt;
-  if (pf && pct !== undefined) pf.style.width = pct + '%';
-}
-
-// ---- Process one image ----
+// ─── Process one image ───
 async function processOne(i) {
-  const file  = images[i];
+  const file    = images[i];
   const origUrl = URL.createObjectURL(file);
-  const badge = document.getElementById('badge-' + i);
-  const pw    = document.getElementById('pw-' + i);
-  const card  = document.getElementById('card-' + i);
-  const thumb = document.getElementById('thumb-' + i);
+  const badge   = document.getElementById('badge-' + i);
+  const pw      = document.getElementById('pw-' + i);
+  const card    = document.getElementById('card-' + i);
+  const thumb   = document.getElementById('thumb-' + i);
 
-  badge.className = 'badge-status processing';
+  badge.className   = 'badge-status processing';
   badge.textContent = 'Processing...';
-  pw.style.display = 'block';
+  pw.style.display  = 'block';
   card.classList.add('processing-card');
   if (thumb) thumb.classList.add('processing');
   setStage(i, '⏳ Reading image...', 8);
 
   try {
     const t0 = performance.now();
-
     setStage(i, '🧠 Running AI segmentation...', 20);
 
-    // pipeline() returns array of segments; first = foreground mask
-    const output = await pipe(origUrl);
+    // Per-image progress updates
+    const imgConfig = {
+      ...IMGLY_CONFIG,
+      progress: (key, cur, total) => {
+        if (!total) return;
+        const pct = Math.round(20 + (cur / total) * 65);
+        setStage(i, `✂️ Processing... ${Math.round((cur/total)*100)}%`, pct);
+      }
+    };
 
-    setStage(i, '✂️ Applying mask to image...', 75);
+    const resultBlob = await removeBackground(file, imgConfig);
 
-    // Get the mask from the segmentation result
-    // output[0].mask is an ImageData-like object
-    const seg = output[0];
-    const maskImg = seg.mask; // RawImage from transformers.js
+    setStage(i, '🎨 Applying background...', 90);
 
-    // Draw original image on canvas
-    const img = new Image();
-    await new Promise((res, rej) => {
-      img.onload = res; img.onerror = rej;
-      img.src = origUrl;
-    });
-
-    const canvas  = document.createElement('canvas');
-    canvas.width  = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    const ctx = canvas.getContext('2d');
-
-    // Optional solid background
+    // Apply solid background color if not transparent
+    let finalBlob = resultBlob;
     if (selectedBg && selectedBg !== 'transparent') {
-      ctx.fillStyle = selectedBg;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      finalBlob = await applyBgColor(resultBlob, selectedBg);
     }
-    ctx.drawImage(img, 0, 0);
 
-    // Apply mask as alpha channel
-    setStage(i, '🎨 Compositing transparent PNG...', 88);
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const d = imageData.data;
-
-    // Resize mask to match image dimensions
-    const maskCanvas = document.createElement('canvas');
-    maskCanvas.width  = canvas.width;
-    maskCanvas.height = canvas.height;
-    const mCtx = maskCanvas.getContext('2d');
-
-    // maskImg is a RawImage — convert to ImageBitmap via blob
-    const maskBlobUrl = maskImg.toCanvas ? URL.createObjectURL(await new Promise(r => maskImg.toCanvas().toBlob(r))) : null;
-
-    if (maskBlobUrl) {
-      const mImage = new Image();
-      await new Promise(res => { mImage.onload = res; mImage.src = maskBlobUrl; });
-      mCtx.drawImage(mImage, 0, 0, canvas.width, canvas.height);
-      URL.revokeObjectURL(maskBlobUrl);
-      const maskData = mCtx.getImageData(0, 0, canvas.width, canvas.height).data;
-      for (let px = 0; px < d.length / 4; px++) {
-        d[px * 4 + 3] = maskData[px * 4]; // use R channel as alpha
-      }
-    } else {
-      // Fallback: use mask.data directly if available
-      const maskRaw = maskImg.data || [];
-      for (let px = 0; px < d.length / 4; px++) {
-        d[px * 4 + 3] = maskRaw[px] ?? 255;
-      }
-    }
-    ctx.putImageData(imageData, 0, 0);
-
-    setStage(i, '💾 Encoding PNG...', 96);
     const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-    const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
 
     card.classList.remove('processing-card');
     if (thumb) thumb.classList.remove('processing');
     setStage(i, '', 100);
+    setTimeout(() => { if (pw) pw.style.display = 'none'; }, 700);
 
-    results[i] = { blob, origUrl };
-    setCardDone(i, file, blob, origUrl, elapsed);
+    results[i] = { blob: finalBlob, origUrl };
+    setCardDone(i, file, finalBlob, origUrl, elapsed);
 
   } catch (err) {
     card.classList.remove('processing-card');
     if (thumb) thumb.classList.remove('processing');
-    badge.className = 'badge-status error';
+    badge.className   = 'badge-status error';
     badge.textContent = '✕ Failed';
-    setStage(i, '❌ ' + (err.message || 'Error').slice(0, 60));
-    document.getElementById('card-' + i).classList.add('error');
-    console.error('processOne failed:', err);
+    setStage(i, '❌ ' + (err.message || 'Error').slice(0, 70));
+    card.classList.add('error');
+    console.error('processOne error:', err);
   }
 }
 
-// ---- Card done ----
+// ─── Apply solid bg color to transparent PNG ───
+async function applyBgColor(pngBlob, color) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = img.width; c.height = img.height;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = color;
+      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.drawImage(img, 0, 0);
+      c.toBlob(resolve, 'image/png');
+    };
+    img.src = URL.createObjectURL(pngBlob);
+  });
+}
+
+// ─── Card done ───
 function setCardDone(i, file, blob, origUrl, elapsed) {
   const badge = document.getElementById('badge-' + i);
-  badge.className = 'badge-status done';
+  badge.className   = 'badge-status done';
   badge.textContent = `✓ ${elapsed}s`;
   document.getElementById('card-' + i).classList.add('done');
-  setTimeout(() => { const pw = document.getElementById('pw-' + i); if (pw) pw.style.display = 'none'; }, 700);
 
-  // Show result in thumbnail with checkerboard bg
+  // Show result PNG in thumbnail (checkerboard = transparent)
   const thumb = document.getElementById('thumb-' + i);
   if (thumb) {
     const bUrl = URL.createObjectURL(blob);
@@ -852,21 +849,21 @@ function setCardDone(i, file, blob, origUrl, elapsed) {
   `;
 }
 
-// ---- Download all ----
+// ─── Download all ───
 function downloadAll() {
   Object.keys(results).forEach((k, idx) => {
     setTimeout(() => {
       const { blob } = results[k];
       const name = images[k].name.replace(/\.[^/.]+$/, '') + '_nobg.png';
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
       a.href = url; a.download = name; a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     }, idx * 350);
   });
 }
 
-// ---- Clear all ----
+// ─── Clear all ───
 function clearAll() {
   images = []; results = {};
   cardsContainer.innerHTML = '';
@@ -879,15 +876,14 @@ function clearAll() {
   processBtn.innerHTML = '✂️ Remove Backgrounds';
   fileInput.value = '';
 }
-
 window.clearAll    = clearAll;
 window.downloadAll = downloadAll;
 
-// ---- Lightbox ----
+// ─── Lightbox ───
 window.openLb = function(i) {
   const r = results[i]; if (!r) return;
   const file = images[i];
-  document.getElementById('lbTitle').textContent = file.name;
+  document.getElementById('lbTitle').textContent  = file.name;
   document.getElementById('lbBeforeImg').src = r.origUrl;
   document.getElementById('lbAfterImg').src  = URL.createObjectURL(r.blob);
   const savedPct = Math.round((1 - r.blob.size / file.size) * 100);
@@ -917,7 +913,7 @@ function applyLbBg(bg) {
   const wrap = document.getElementById('compareWrap');
   if (bg === 'checker') {
     wrap.style.backgroundImage = 'linear-gradient(45deg,#ccc 25%,transparent 25%),linear-gradient(-45deg,#ccc 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#ccc 75%),linear-gradient(-45deg,transparent 75%,#ccc 75%)';
-    wrap.style.backgroundSize = '20px 20px';
+    wrap.style.backgroundSize  = '20px 20px';
     wrap.style.backgroundPosition = '0 0,0 10px,10px -10px,-10px 0';
     wrap.style.backgroundColor = '#f0f0f0';
   } else {
@@ -943,20 +939,16 @@ function initSlider() {
   function setPos(x) {
     const r = wrap.getBoundingClientRect();
     const p = Math.max(0, Math.min(100, ((x - r.left) / r.width) * 100));
-    before.style.width = p + '%';
-    divider.style.left = p + '%';
-    handle.style.left  = p + '%';
+    before.style.width  = p + '%';
+    divider.style.left  = p + '%';
+    handle.style.left   = p + '%';
   }
-  // Remove old listeners by cloning
-  const newWrap = wrap.cloneNode(true);
-  wrap.parentNode.replaceChild(newWrap, wrap);
-  const w2 = document.getElementById('compareWrap');
-  w2.addEventListener('mousedown', e => { drag = true; setPos(e.clientX); });
+  wrap.addEventListener('mousedown',  e => { drag = true;  setPos(e.clientX); });
   window.addEventListener('mousemove', e => { if (drag) setPos(e.clientX); });
-  window.addEventListener('mouseup', () => drag = false);
-  w2.addEventListener('touchstart', e => { drag = true; setPos(e.touches[0].clientX); }, {passive:true});
-  window.addEventListener('touchmove', e => { if (drag) setPos(e.touches[0].clientX); }, {passive:true});
-  window.addEventListener('touchend', () => drag = false);
+  window.addEventListener('mouseup',  () => { drag = false; });
+  wrap.addEventListener('touchstart', e => { drag = true;  setPos(e.touches[0].clientX); }, { passive: true });
+  window.addEventListener('touchmove', e => { if (drag) setPos(e.touches[0].clientX); }, { passive: true });
+  window.addEventListener('touchend', () => { drag = false; });
 }
 </script>
 </body>
