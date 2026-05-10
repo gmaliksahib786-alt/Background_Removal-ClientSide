@@ -490,121 +490,47 @@ input[type="color"]{width:28px;height:28px;border:none;border-radius:50%;cursor:
   </div>
 </div>
 
-<!-- Transformers.js v3 — WebGPU + WASM fallback, RMBG-1.4 model -->
+<!-- Transformers.js v3 via jsdelivr — handles CORS automatically via HF CDN -->
 <script type="module">
-import { env, AutoModel, AutoProcessor, RawImage } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.2/dist/transformers.min.js';
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.5.2/dist/transformers.min.js';
 
-// ---- Config ----
-// Use Hugging Face CDN for model weights — no self-hosting needed
-env.allowLocalModels = false;
-env.useBrowserCache = true; // cache model after first download
+// Allow remote models, use browser cache
+env.allowRemoteModels = true;
+env.useBrowserCache   = true;
+env.backends.onnx.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.21.0/dist/';
 
 // ---- State ----
-let images = [];
-let results = {};
-let selectedBg = 'transparent';
-let model = null;
-let processor = null;
-let modelLoading = false;
-let useWebGPU = false;
-
-const MODEL_ID = 'briaai/RMBG-1.4';
+let images        = [];
+let results       = {};
+let selectedBg    = 'transparent';
+let selectedQuality = 'isnet_fp16';
+let pipe          = null;
+let modelLoading  = false;
 
 // ---- DOM refs ----
-const dropZone    = document.getElementById('dropZone');
-const fileInput   = document.getElementById('fileInput');
-const processBtn  = document.getElementById('processBtn');
-const cardsSection= document.getElementById('cardsSection');
-const cardsContainer = document.getElementById('cardsContainer');
-const dlAllBtn    = document.getElementById('dlAllBtn');
-const bgPicker    = document.getElementById('bgPicker');
-const modelOverlay = document.getElementById('modelOverlay');
-const mloBar = document.getElementById('mloBar');
-const mloStatus = document.getElementById('mloStatus');
-const mloSub = document.getElementById('mloSub');
+const dropZone      = document.getElementById('dropZone');
+const fileInput     = document.getElementById('fileInput');
+const processBtn    = document.getElementById('processBtn');
+const cardsSection  = document.getElementById('cardsSection');
+const cardsContainer= document.getElementById('cardsContainer');
+const dlAllBtn      = document.getElementById('dlAllBtn');
+const bgPicker      = document.getElementById('bgPicker');
+const modelOverlay  = document.getElementById('modelOverlay');
+const mloBar        = document.getElementById('mloBar');
+const mloStatus     = document.getElementById('mloStatus');
+const mloSub        = document.getElementById('mloSub');
 
-// ---- Detect WebGPU ----
-async function checkWebGPU() {
-  try {
-    if (!navigator.gpu) return false;
-    const adapter = await navigator.gpu.requestAdapter();
-    return !!adapter;
-  } catch { return false; }
-}
-
-// ---- Model selector (maps to model quality — same model, just UI) ----
-let selectedQuality = 'quantized'; // default = fast
+// ---- Model selector ----
 document.querySelectorAll('.model-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.model-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     selectedQuality = btn.dataset.model;
-    // Reset loaded model so it reloads with new precision
-    if (model) { model = null; processor = null; }
+    pipe = null; // reset so next run reloads
   });
 });
 
-// Map UI model names to RMBG onnx variants
-function getModelFile() {
-  const map = {
-    'isnet_fp16':    'model_fp16.onnx',     // Best Quality
-    'isnet_quint8':  'model_quantized.onnx', // Balanced
-    'u2net':         'model_quantized.onnx', // Fast (same quant)
-    'u2netp':        'model_quantized.onnx', // Mobile
-  };
-  return map[selectedQuality] || 'model_quantized.onnx';
-}
-
-// ---- Load model ----
-async function loadModel() {
-  if (model && processor) return true;
-  if (modelLoading) return false;
-  modelLoading = true;
-
-  modelOverlay.classList.add('show');
-  animateMloBar(0, 30);
-
-  useWebGPU = await checkWebGPU();
-  const dtype = getModelFile().includes('fp16') ? 'fp16' : 'q8';
-
-  try {
-    // Processor config for RMBG-1.4
-    const processorConfig = {
-      do_normalize: true, do_pad: false, do_rescale: true, do_resize: true,
-      image_mean: [0.5, 0.5, 0.5], image_std: [1, 1, 1],
-      resample: 2, rescale_factor: 1/255,
-      size: { width: 1024, height: 1024 },
-    };
-
-    [model, processor] = await Promise.all([
-      AutoModel.from_pretrained(MODEL_ID, {
-        config: { model_type: 'custom' },
-        device: useWebGPU ? 'webgpu' : 'wasm',
-        dtype: useWebGPU ? 'fp32' : dtype,
-      }),
-      AutoProcessor.from_pretrained(MODEL_ID, { config: processorConfig }),
-    ]);
-
-    animateMloBar(30, 98);
-    await new Promise(r => setTimeout(r, 1200));
-    if (mloBar) mloBar.style.width = '100%';
-    if (mloStatus) mloStatus.textContent = '✅ Model ready!';
-    await new Promise(r => setTimeout(r, 500));
-    modelOverlay.classList.remove('show');
-    modelLoading = false;
-    console.log('Model loaded!', useWebGPU ? 'WebGPU ⚡' : 'WASM');
-    return true;
-  } catch(err) {
-    console.error('Model load failed:', err);
-    if (mloSub) mloSub.textContent = '❌ Load failed. Check internet & retry.';
-    if (mloStatus) mloStatus.textContent = 'Failed.';
-    modelOverlay.classList.remove('show');
-    modelLoading = false;
-    return false;
-  }
-}
-
-// ---- BG swatch selector ----
+// ---- BG swatch ----
 document.querySelectorAll('.bg-swatch').forEach(sw => {
   sw.addEventListener('click', () => {
     document.querySelectorAll('.bg-swatch').forEach(s => s.classList.remove('active'));
@@ -630,18 +556,15 @@ fileInput.addEventListener('change', () => addFiles([...fileInput.files]));
 function addFiles(files) {
   const imgs = files.filter(f => f.type.startsWith('image/'));
   if (!imgs.length) return;
-  imgs.forEach(f => {
-    if (!images.find(i => i.name === f.name && i.size === f.size)) images.push(f);
-  });
+  imgs.forEach(f => { if (!images.find(i => i.name === f.name && i.size === f.size)) images.push(f); });
   bgPicker.classList.add('visible');
   processBtn.classList.add('visible');
   cardsSection.classList.add('visible');
   results = {};
   dlAllBtn.style.display = 'none';
   renderCards();
-
-  // Preload model in background as soon as images are added
-  if (!model && !modelLoading) loadModel();
+  // Preload model in background
+  if (!pipe && !modelLoading) loadModel(true);
 }
 
 function fmtBytes(b) {
@@ -650,6 +573,7 @@ function fmtBytes(b) {
   return (b/1048576).toFixed(2) + 'MB';
 }
 
+// ---- Render cards ----
 function renderCards() {
   cardsContainer.innerHTML = '';
   document.getElementById('queueMeta').textContent = images.length + ' file' + (images.length !== 1 ? 's' : '');
@@ -660,9 +584,7 @@ function renderCards() {
     card.id = 'card-' + i;
     card.innerHTML = `
       <div class="card-inner">
-        <div class="thumb-wrap" id="thumb-${i}">
-          <div class="thumb-shimmer"></div>
-        </div>
+        <div class="thumb-wrap" id="thumb-${i}"><div class="thumb-shimmer"></div></div>
         <div class="card-info">
           <div class="card-name" title="${file.name}">${file.name}</div>
           <div class="card-meta-row">
@@ -672,32 +594,111 @@ function renderCards() {
           <div class="progress-wrap" id="pw-${i}" style="display:none">
             <div class="progress-fill" id="pf-${i}"></div>
           </div>
+          <div class="stage-text" id="stage-${i}"></div>
         </div>
         <div class="card-actions" id="actions-${i}">
           <button class="view-btn" disabled>View</button>
         </div>
-      </div>
-    `;
+      </div>`;
     cardsContainer.appendChild(card);
     const img = new Image();
     img.onload = () => {
       const wrap = document.getElementById('thumb-' + i);
-      if (wrap) wrap.innerHTML = `<img style="width:100%;height:100%;object-fit:cover;border-radius:8px;display:block" src="${origUrl}">`;
+      if (wrap) wrap.innerHTML = `<img class="thumb-inner" src="${origUrl}" alt="">`;
     };
     img.src = origUrl;
   });
 }
 
-// ---- Process ----
+// ---- Animated progress bar ----
+let barInterval = null;
+function startBarAnim(from, to, speed) {
+  clearInterval(barInterval);
+  let v = from;
+  const msgs = [
+    'Fetching model weights...', 'Loading ONNX runtime...',
+    'Initializing RMBG-1.4...', 'Warming up AI engine...'
+  ];
+  let mi = 0;
+  barInterval = setInterval(() => {
+    v = Math.min(v + speed, to);
+    if (mloBar) mloBar.style.width = v + '%';
+    if (mloStatus) mloStatus.textContent = Math.round(v) + '% — ' + msgs[Math.min(mi, msgs.length - 1)];
+    if (v % 22 < speed && v > from + 5) mi = Math.min(mi + 1, msgs.length - 1);
+    if (v >= to) clearInterval(barInterval);
+  }, 80);
+}
+
+// ---- Load model ----
+async function loadModel(silent = false) {
+  if (pipe) return true;
+  if (modelLoading) { while (modelLoading) await new Promise(r => setTimeout(r, 100)); return !!pipe; }
+  modelLoading = true;
+
+  if (!silent || true) { // always show overlay
+    modelOverlay.classList.add('show');
+    startBarAnim(0, 40, 0.6);
+  }
+
+  try {
+    // Use image-segmentation pipeline — handles CORS automatically
+    // Xenova mirror has CORS headers, direct HF does not
+    pipe = await pipeline(
+      'image-segmentation',
+      'Xenova/modnet',
+      {
+        device: 'wasm',
+        dtype: 'q8',
+        progress_callback: (p) => {
+          if (p.status === 'downloading' && p.total) {
+            const pct = Math.round(30 + (p.loaded / p.total) * 60);
+            if (mloBar) mloBar.style.width = pct + '%';
+            if (mloStatus) {
+              const mb = (p.loaded / 1048576).toFixed(1);
+              const tot = (p.total / 1048576).toFixed(1);
+              mloStatus.textContent = `${mb}MB / ${tot}MB downloaded`;
+            }
+          }
+          if (p.status === 'ready') {
+            if (mloBar) mloBar.style.width = '98%';
+            if (mloStatus) mloStatus.textContent = 'Model loaded — starting...';
+          }
+        }
+      }
+    );
+
+    clearInterval(barInterval);
+    if (mloBar) mloBar.style.width = '100%';
+    if (mloStatus) mloStatus.textContent = '✅ Ready!';
+    await new Promise(r => setTimeout(r, 500));
+    modelOverlay.classList.remove('show');
+    modelLoading = false;
+    return true;
+
+  } catch (err) {
+    clearInterval(barInterval);
+    console.error('Model load failed:', err);
+    if (mloSub) mloSub.textContent = '❌ Failed to load. Check your connection & retry.';
+    if (mloStatus) mloStatus.textContent = 'Error — see console.';
+    if (mloBar) mloBar.style.width = '0%';
+    modelLoading = false;
+    pipe = null;
+    // Hide overlay after 3s so user can retry
+    setTimeout(() => modelOverlay.classList.remove('show'), 3000);
+    return false;
+  }
+}
+
+// ---- Process button ----
 processBtn.addEventListener('click', async () => {
   if (!images.length) return;
   processBtn.disabled = true;
-  processBtn.innerHTML = '✂️ Processing...';
   processBtn.classList.add('running');
+  processBtn.innerHTML = '✂️ Processing...';
   results = {};
   dlAllBtn.style.display = 'none';
 
-  const ok = await loadModel();
+  const ok = await loadModel(false);
   if (!ok) {
     processBtn.disabled = false;
     processBtn.classList.remove('running');
@@ -705,19 +706,17 @@ processBtn.addEventListener('click', async () => {
     return;
   }
 
-  let done = 0;
   for (let i = 0; i < images.length; i++) {
     await processOne(i);
-    done++;
-    if (done === images.length) {
-      processBtn.disabled = false;
-      processBtn.classList.remove('running');
-      processBtn.innerHTML = '✅ Done! Process Again';
-      dlAllBtn.style.display = 'flex';
-    }
   }
+
+  processBtn.disabled = false;
+  processBtn.classList.remove('running');
+  processBtn.innerHTML = '✅ Done! Process Again';
+  dlAllBtn.style.display = 'flex';
 });
 
+// ---- Stage text helper ----
 function setStage(i, txt, pct) {
   const el = document.getElementById('stage-' + i);
   const pf = document.getElementById('pf-' + i);
@@ -725,27 +724,12 @@ function setStage(i, txt, pct) {
   if (pf && pct !== undefined) pf.style.width = pct + '%';
 }
 
-function animateMloBar(from, to) {
-  let v = from;
-  const msgs = ['Fetching model weights...','Loading ONNX runtime...','Initializing RMBG-1.4...','Warming up AI engine...'];
-  let mi = 0;
-  const iv = setInterval(() => {
-    v = Math.min(v + 0.8, to);
-    if (mloBar) mloBar.style.width = v + '%';
-    if (mloStatus) mloStatus.textContent = Math.round(v) + '% — ' + msgs[Math.min(mi, msgs.length-1)];
-    if (Math.round(v) % 8 === 0 && v > from + 5) mi = Math.min(mi+1, msgs.length-1);
-    if (v >= to) clearInterval(iv);
-  }, 80);
-  // After model actually starts downloading (Promise.all), jump bar to 90
-  return iv;
-}
-
+// ---- Process one image ----
 async function processOne(i) {
-  const file = images[i];
+  const file  = images[i];
   const origUrl = URL.createObjectURL(file);
   const badge = document.getElementById('badge-' + i);
   const pw    = document.getElementById('pw-' + i);
-  const pf    = document.getElementById('pf-' + i);
   const card  = document.getElementById('card-' + i);
   const thumb = document.getElementById('thumb-' + i);
 
@@ -754,47 +738,78 @@ async function processOne(i) {
   pw.style.display = 'block';
   card.classList.add('processing-card');
   if (thumb) thumb.classList.add('processing');
-
-  setStage(i, '⏳ Loading image...', 5);
+  setStage(i, '⏳ Reading image...', 8);
 
   try {
     const t0 = performance.now();
 
-    const rawImg = await RawImage.fromURL(origUrl);
-    setStage(i, '🧠 Running AI inference...', 25);
+    setStage(i, '🧠 Running AI segmentation...', 20);
 
-    const { pixel_values } = await processor(rawImg);
-    setStage(i, '🔍 Segmenting foreground...', 55);
+    // pipeline() returns array of segments; first = foreground mask
+    const output = await pipe(origUrl);
 
-    const { output } = await model({ input: pixel_values });
-    setStage(i, '✂️ Applying mask...', 78);
+    setStage(i, '✂️ Applying mask to image...', 75);
 
-    const mask = await RawImage.fromTensor(output[0].mul(255).to('uint8')).resize(rawImg.width, rawImg.height);
+    // Get the mask from the segmentation result
+    // output[0].mask is an ImageData-like object
+    const seg = output[0];
+    const maskImg = seg.mask; // RawImage from transformers.js
 
-    const canvas = document.createElement('canvas');
-    canvas.width = rawImg.width;
-    canvas.height = rawImg.height;
+    // Draw original image on canvas
+    const img = new Image();
+    await new Promise((res, rej) => {
+      img.onload = res; img.onerror = rej;
+      img.src = origUrl;
+    });
+
+    const canvas  = document.createElement('canvas');
+    canvas.width  = img.naturalWidth;
+    canvas.height = img.naturalHeight;
     const ctx = canvas.getContext('2d');
 
+    // Optional solid background
     if (selectedBg && selectedBg !== 'transparent') {
       ctx.fillStyle = selectedBg;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
+    ctx.drawImage(img, 0, 0);
 
-    ctx.drawImage(rawImg.toCanvas(), 0, 0);
-
+    // Apply mask as alpha channel
+    setStage(i, '🎨 Compositing transparent PNG...', 88);
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const maskData = mask.data;
-    for (let j = 0; j < maskData.length; j++) {
-      imageData.data[j * 4 + 3] = maskData[j];
+    const d = imageData.data;
+
+    // Resize mask to match image dimensions
+    const maskCanvas = document.createElement('canvas');
+    maskCanvas.width  = canvas.width;
+    maskCanvas.height = canvas.height;
+    const mCtx = maskCanvas.getContext('2d');
+
+    // maskImg is a RawImage — convert to ImageBitmap via blob
+    const maskBlobUrl = maskImg.toCanvas ? URL.createObjectURL(await new Promise(r => maskImg.toCanvas().toBlob(r))) : null;
+
+    if (maskBlobUrl) {
+      const mImage = new Image();
+      await new Promise(res => { mImage.onload = res; mImage.src = maskBlobUrl; });
+      mCtx.drawImage(mImage, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(maskBlobUrl);
+      const maskData = mCtx.getImageData(0, 0, canvas.width, canvas.height).data;
+      for (let px = 0; px < d.length / 4; px++) {
+        d[px * 4 + 3] = maskData[px * 4]; // use R channel as alpha
+      }
+    } else {
+      // Fallback: use mask.data directly if available
+      const maskRaw = maskImg.data || [];
+      for (let px = 0; px < d.length / 4; px++) {
+        d[px * 4 + 3] = maskRaw[px] ?? 255;
+      }
     }
     ctx.putImageData(imageData, 0, 0);
-    setStage(i, '💾 Encoding PNG...', 92);
 
+    setStage(i, '💾 Encoding PNG...', 96);
     const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
     const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
 
-    if (pf) pf.style.width = '100%';
     card.classList.remove('processing-card');
     if (thumb) thumb.classList.remove('processing');
     setStage(i, '', 100);
@@ -802,35 +817,31 @@ async function processOne(i) {
     results[i] = { blob, origUrl };
     setCardDone(i, file, blob, origUrl, elapsed);
 
-  } catch(err) {
+  } catch (err) {
     card.classList.remove('processing-card');
     if (thumb) thumb.classList.remove('processing');
     badge.className = 'badge-status error';
     badge.textContent = '✕ Failed';
-    setStage(i, '❌ ' + (err.message || 'Error'), 0);
-    if (pf) pf.style.width = '0%';
+    setStage(i, '❌ ' + (err.message || 'Error').slice(0, 60));
     document.getElementById('card-' + i).classList.add('error');
-    console.error('Failed:', err);
+    console.error('processOne failed:', err);
   }
 }
 
+// ---- Card done ----
 function setCardDone(i, file, blob, origUrl, elapsed) {
   const badge = document.getElementById('badge-' + i);
   badge.className = 'badge-status done';
   badge.textContent = `✓ ${elapsed}s`;
-  const card = document.getElementById('card-' + i);
-  card.classList.add('done');
-  setTimeout(() => {
-    const pw = document.getElementById('pw-' + i);
-    if (pw) pw.style.display = 'none';
-  }, 700);
+  document.getElementById('card-' + i).classList.add('done');
+  setTimeout(() => { const pw = document.getElementById('pw-' + i); if (pw) pw.style.display = 'none'; }, 700);
 
-  // Show result PNG in thumbnail (checkerboard bg = transparent)
+  // Show result in thumbnail with checkerboard bg
   const thumb = document.getElementById('thumb-' + i);
   if (thumb) {
     const bUrl = URL.createObjectURL(blob);
     thumb.classList.add('done-thumb');
-    thumb.innerHTML = `<img class="thumb-inner" src="${bUrl}" alt="Result" style="width:100%;height:100%;object-fit:contain;display:block;border-radius:10px">`;
+    thumb.innerHTML = `<img class="thumb-inner" src="${bUrl}" style="width:100%;height:100%;object-fit:contain;border-radius:10px">`;
   }
 
   const blobUrl = URL.createObjectURL(blob);
@@ -841,6 +852,7 @@ function setCardDone(i, file, blob, origUrl, elapsed) {
   `;
 }
 
+// ---- Download all ----
 function downloadAll() {
   Object.keys(results).forEach((k, idx) => {
     setTimeout(() => {
@@ -854,6 +866,7 @@ function downloadAll() {
   });
 }
 
+// ---- Clear all ----
 function clearAll() {
   images = []; results = {};
   cardsContainer.innerHTML = '';
@@ -862,27 +875,26 @@ function clearAll() {
   cardsSection.classList.remove('visible');
   dlAllBtn.style.display = 'none';
   processBtn.disabled = false;
+  processBtn.classList.remove('running');
   processBtn.innerHTML = '✂️ Remove Backgrounds';
   fileInput.value = '';
 }
 
-window.clearAll = clearAll;
+window.clearAll    = clearAll;
 window.downloadAll = downloadAll;
 
-// ---- LIGHTBOX ----
+// ---- Lightbox ----
 window.openLb = function(i) {
-  const r = results[i];
-  if (!r) return;
+  const r = results[i]; if (!r) return;
   const file = images[i];
   document.getElementById('lbTitle').textContent = file.name;
   document.getElementById('lbBeforeImg').src = r.origUrl;
-  document.getElementById('lbAfterImg').src = URL.createObjectURL(r.blob);
-  const savedPct = Math.round((1 - r.blob.size/file.size)*100);
+  document.getElementById('lbAfterImg').src  = URL.createObjectURL(r.blob);
+  const savedPct = Math.round((1 - r.blob.size / file.size) * 100);
   document.getElementById('lbStats').innerHTML = `
     <div class="lb-stat"><div class="val">${fmtBytes(file.size)}</div><div class="lbl">Original</div></div>
     <div class="lb-stat"><div class="val">${fmtBytes(r.blob.size)}</div><div class="lbl">Output PNG</div></div>
-    <div class="lb-stat savings"><div class="val">${savedPct > 0 ? savedPct + '%' : 'Same'}</div><div class="lbl">Size change</div></div>
-  `;
+    <div class="lb-stat savings"><div class="val">${savedPct > 0 ? savedPct + '%' : 'N/A'}</div><div class="lbl">Size diff</div></div>`;
   const outName = file.name.replace(/\.[^/.]+$/, '') + '_nobg.png';
   const blobUrl = URL.createObjectURL(r.blob);
   document.getElementById('lbDlBtn').onclick = () => {
@@ -925,22 +937,26 @@ document.addEventListener('keydown', e => {
 function initSlider() {
   const wrap   = document.getElementById('compareWrap');
   const before = document.getElementById('lbBeforeWrap');
-  const div    = document.getElementById('compareDivider');
+  const divider= document.getElementById('compareDivider');
   const handle = document.getElementById('compareHandle');
-  let dragging = false;
+  let drag = false;
   function setPos(x) {
     const r = wrap.getBoundingClientRect();
-    const pct = Math.max(0, Math.min(100, ((x - r.left) / r.width) * 100));
-    before.style.width = pct + '%';
-    div.style.left = pct + '%';
-    handle.style.left = pct + '%';
+    const p = Math.max(0, Math.min(100, ((x - r.left) / r.width) * 100));
+    before.style.width = p + '%';
+    divider.style.left = p + '%';
+    handle.style.left  = p + '%';
   }
-  wrap.addEventListener('mousedown', e => { dragging = true; setPos(e.clientX); });
-  window.addEventListener('mousemove', e => { if (dragging) setPos(e.clientX); });
-  window.addEventListener('mouseup', () => { dragging = false; });
-  wrap.addEventListener('touchstart', e => { dragging = true; setPos(e.touches[0].clientX); }, {passive:true});
-  window.addEventListener('touchmove', e => { if (dragging) setPos(e.touches[0].clientX); }, {passive:true});
-  window.addEventListener('touchend', () => { dragging = false; });
+  // Remove old listeners by cloning
+  const newWrap = wrap.cloneNode(true);
+  wrap.parentNode.replaceChild(newWrap, wrap);
+  const w2 = document.getElementById('compareWrap');
+  w2.addEventListener('mousedown', e => { drag = true; setPos(e.clientX); });
+  window.addEventListener('mousemove', e => { if (drag) setPos(e.clientX); });
+  window.addEventListener('mouseup', () => drag = false);
+  w2.addEventListener('touchstart', e => { drag = true; setPos(e.touches[0].clientX); }, {passive:true});
+  window.addEventListener('touchmove', e => { if (drag) setPos(e.touches[0].clientX); }, {passive:true});
+  window.addEventListener('touchend', () => drag = false);
 }
 </script>
 </body>
