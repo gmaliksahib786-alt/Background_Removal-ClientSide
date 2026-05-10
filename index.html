@@ -562,8 +562,7 @@ async function loadModel() {
   modelLoading = true;
 
   modelOverlay.classList.add('show');
-    animateMloBar(0, 30);
-  wasmBanner.querySelector('span').textContent = 'AI model loading... (first time ~45MB, cached forever after)';
+  animateMloBar(0, 30);
 
   useWebGPU = await checkWebGPU();
   const dtype = getModelFile().includes('fp16') ? 'fp16' : 'q8';
@@ -586,17 +585,20 @@ async function loadModel() {
       AutoProcessor.from_pretrained(MODEL_ID, { config: processorConfig }),
     ]);
 
-    modelOverlay.classList.remove('show');
-    mloBar.style.width = '100%';
-    modelLoading = false;
+    animateMloBar(30, 98);
+    await new Promise(r => setTimeout(r, 1200));
     if (mloBar) mloBar.style.width = '100%';
-    if (mloStatus) mloStatus.textContent = 'Model ready!';
-    await new Promise(r => setTimeout(r, 400));
+    if (mloStatus) mloStatus.textContent = '✅ Model ready!';
+    await new Promise(r => setTimeout(r, 500));
+    modelOverlay.classList.remove('show');
+    modelLoading = false;
     console.log('Model loaded!', useWebGPU ? 'WebGPU ⚡' : 'WASM');
     return true;
   } catch(err) {
     console.error('Model load failed:', err);
-    mloSub.textContent = '❌ Load failed. Check internet & retry.';
+    if (mloSub) mloSub.textContent = '❌ Load failed. Check internet & retry.';
+    if (mloStatus) mloStatus.textContent = 'Failed.';
+    modelOverlay.classList.remove('show');
     modelLoading = false;
     return false;
   }
@@ -725,12 +727,16 @@ function setStage(i, txt, pct) {
 
 function animateMloBar(from, to) {
   let v = from;
+  const msgs = ['Fetching model weights...','Loading ONNX runtime...','Initializing RMBG-1.4...','Warming up AI engine...'];
+  let mi = 0;
   const iv = setInterval(() => {
-    v = Math.min(v + 1, to);
+    v = Math.min(v + 0.8, to);
     if (mloBar) mloBar.style.width = v + '%';
-    if (mloStatus) mloStatus.textContent = v + '% loaded...';
+    if (mloStatus) mloStatus.textContent = Math.round(v) + '% — ' + msgs[Math.min(mi, msgs.length-1)];
+    if (Math.round(v) % 8 === 0 && v > from + 5) mi = Math.min(mi+1, msgs.length-1);
     if (v >= to) clearInterval(iv);
-  }, 60);
+  }, 80);
+  // After model actually starts downloading (Promise.all), jump bar to 90
   return iv;
 }
 
